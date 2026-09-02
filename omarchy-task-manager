@@ -229,21 +229,25 @@ scrollbar slider {{
 """
 
 
+def _provider_load(provider: Gtk.CssProvider, css: str) -> None:
+    if hasattr(provider, "load_from_string"):
+        provider.load_from_string(css)
+        return
+    data = css.encode("utf-8")
+    try:
+        provider.load_from_data(data)
+    except TypeError:
+        provider.load_from_data(data, len(data))
+
+
 def apply_theme() -> None:
     bg, fg, accent = load_theme_colors()
     css = build_css(bg, fg, accent)
     provider = Gtk.CssProvider()
     try:
-        if hasattr(provider, "load_from_string"):
-            provider.load_from_string(css)
-        else:
-            provider.load_from_data(css.encode("utf-8"))
+        _provider_load(provider, css)
     except Exception:
-        fallback = build_css(FALLBACK_BG, FALLBACK_FG, FALLBACK_FG)
-        if hasattr(provider, "load_from_string"):
-            provider.load_from_string(fallback)
-        else:
-            provider.load_from_data(fallback.encode("utf-8"))
+        _provider_load(provider, build_css(FALLBACK_BG, FALLBACK_FG, FALLBACK_FG))
     display = Gdk.Display.get_default()
     if display is None:
         return
@@ -569,7 +573,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._prev_overall: tuple[int, int] | None = None
         self._prev_cores: dict[int, tuple[int, int]] = {}
         self._core_ids: list[int] = []
-        self._prev_proc: dict[int, int] = {}
+        self._prev_proc: dict[tuple[int, int], int] = {}
         self._prev_total_jiffies: int | None = None
         self._row_iters: dict[int, Gtk.TreeIter] = {}
         self._core_bars: list[Gtk.ProgressBar] = []
@@ -601,7 +605,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self.core_flow = Gtk.FlowBox()
         self.core_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self.core_flow.set_homogeneous(False)
-        self.core_flow.set_max_children_per_line(12)
+        self.core_flow.set_max_children_per_line(6)
         self.core_flow.set_min_children_per_line(2)
         self.core_flow.set_column_spacing(6)
         self.core_flow.set_row_spacing(4)
@@ -899,7 +903,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             if pid not in live:
                 self.store.remove(self._row_iters[pid])
                 del self._row_iters[pid]
-                self._prev_proc.pop(pid, None)
         for key in list(self._prev_proc):
             if key not in seen_keys:
                 del self._prev_proc[key]
