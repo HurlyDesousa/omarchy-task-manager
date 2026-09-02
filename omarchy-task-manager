@@ -1,0 +1,1007 @@
+#!/usr/bin/env python3
+"""Omarchy Task Manager — GTK4 CPU, thermal, fan, and process monitor."""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+try:
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+except (ImportError, ValueError) as exc:
+    sys.stderr.write(
+        "Task Manager needs GTK4 and PyGObject.\n"
+        "Install with: pacman -S --needed python python-gobject gtk4\n"
+        f"{exc}\n"
+    )
+    sys.exit(1)
+
+APP_ID = "art.sw.omarchy.TaskManager"
+APP_TITLE = "Task Manager"
+REFRESH_MS = 1000
+FAN_TIMEOUT = 0.8
+EM_DASH = "\u2014"
+PREFERRED_THERMAL = (
+    "cpu0-0-top-thermal",
+    "cpu1-0-top-thermal",
+    "cpu2-0-top-thermal",
+)
+FALLBACK_BG = "#1a1a1a"
+FALLBACK_FG = "#c8c8c8"
+FAN_BIN_PRIMARY = "/usr/local/bin/x1e-ec-tool"
+THEME_DIR = Path.home() / ".config" / "omarchy" / "current" / "theme"
+
+COL_NAME, COL_PID, COL_CPU, COL_CPU_TXT, COL_RSS, COL_RSS_TXT = range(6)
+
+try:
+    PAGE_SIZE = int(os.sysconf("SC_PAGE_SIZE"))
+except (OSError, ValueError):
+    PAGE_SIZE = 4096
+
+DEFINE_COLOR_RE = re.compile(
+    r"@define-color\s+([A-Za-z0-9_-]+)\s+([^;]+);", re.MULTILINE
+)
+TOML_STR_RE = re.compile(
+    r'^([A-Za-z0-9_-]+)\s*=\s*["\']([^"\']+)["\']', re.MULTILINE
+)
+LEFT_FAN_RE = re.compile(r"Left Fan:\s*(\d+)\s*RPM", re.IGNORECASE)
+RIGHT_FAN_RE = re.compile(r"Right Fan:\s*(\d+)\s*RPM", re.IGNORECASE)
+
+
+def _norm_color(value: str) -> str:
+    value = value.strip().strip('"').strip("'").rstrip(";").strip()
+    if re.fullmatch(r"[0-9A-Fa-f]{3,8}", value):
+        return "#" + value
+    return value
+
+
+def _css_color(value: str | None, fallback: str) -> str:
+    if not value:
+        return fallback
+    v = value.strip()
+    if v.startswith("@"):
+        return fallback
+    if re.fullmatch(r"#[0-9A-Fa-f]{3,8}", v):
+        return v
+    if re.fullmatch(r"(?:rgba?|hsla?)\([^;{}]+\)", v, re.I):
+        return v
+    return fallback
+
+
+def _load_colors_toml(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        import tomllib
+
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return out
+        for key, val in TOML_STR_RE.findall(text):
+            out[key.lower()] = _norm_color(val)
+        return out
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if isinstance(val, str):
+                    out[str(key).lower()] = _norm_color(val)
+                else:
+                    walk(val)
+
+    walk(data)
+    return out
+
+
+def _load_waybar_css(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    for key, val in DEFINE_COLOR_RE.findall(text):
+        out[key.lower()] = _norm_color(val)
+    return out
+
+
+def load_theme_colors() -> tuple[str, str, str]:
+    colors: dict[str, str] = {}
+    toml_path = THEME_DIR / "colors.toml"
+    css_path = THEME_DIR / "waybar.css"
+    if toml_path.is_file():
+        colors.update(_load_colors_toml(toml_path))
+    if css_path.is_file():
+        colors.update(_load_waybar_css(css_path))
+    bg = _css_color(colors.get("background"), FALLBACK_BG)
+    fg = _css_color(colors.get("foreground"), FALLBACK_FG)
+    accent = _css_color(
+        colors.get("accent")
+        or colors.get("color4")
+        or colors.get("blue")
+        or colors.get("theme-blue"),
+        fg,
+    )
+    return bg, fg, accent
+
+
+def build_css(bg: str, fg: str, accent: str) -> str:
+    return f"""
+window.omarchy-tm {{
+  background-color: {bg};
+  color: {fg};
+  font-family: "JetBrainsMono Nerd Font", "JetBrainsMono NFM",
+               "JetBrainsMono NF", "JetBrains Mono", monospace;
+  font-size: 12px;
+}}
+label {{
+  color: {fg};
+}}
+label.dim {{
+  opacity: 0.72;
+}}
+label.stat-value {{
+  font-weight: 600;
+}}
+progressbar > trough {{
+  min-height: 10px;
+  min-width: 80px;
+  background-color: alpha({fg}, 0.12);
+  border: none;
+  border-radius: 2px;
+  padding: 0;
+}}
+progressbar > trough > progress {{
+  min-height: 10px;
+  background-color: {accent};
+  border: none;
+  border-radius: 2px;
+}}
+progressbar.cpu-core > trough {{
+  min-height: 8px;
+  min-width: 44px;
+}}
+entry {{
+  background-color: alpha({fg}, 0.08);
+  color: {fg};
+  caret-color: {fg};
+  border: 1px solid alpha({fg}, 0.16);
+  border-radius: 4px;
+  min-height: 26px;
+  padding: 2px 8px;
+}}
+entry:focus {{
+  border-color: {accent};
+}}
+button {{
+  background-color: alpha({fg}, 0.10);
+  color: {fg};
+  border: 1px solid alpha({fg}, 0.18);
+  border-radius: 4px;
+  min-height: 26px;
+  padding: 2px 12px;
+}}
+button:hover {{
+  background-color: {accent};
+  color: {bg};
+}}
+button:disabled {{
+  opacity: 0.45;
+}}
+treeview {{
+  background-color: {bg};
+  color: {fg};
+}}
+treeview:selected {{
+  background-color: {accent};
+  color: {bg};
+}}
+treeview header button {{
+  background-color: alpha({fg}, 0.06);
+  color: {fg};
+  border: none;
+  border-bottom: 1px solid alpha({fg}, 0.14);
+  font-weight: 600;
+  padding: 2px 6px;
+  min-height: 22px;
+}}
+scrolledwindow {{
+  border: 1px solid alpha({fg}, 0.12);
+  border-radius: 4px;
+}}
+scrollbar slider {{
+  background-color: alpha({fg}, 0.28);
+  border-radius: 4px;
+  min-width: 8px;
+}}
+"""
+
+
+def apply_theme() -> None:
+    bg, fg, accent = load_theme_colors()
+    css = build_css(bg, fg, accent)
+    provider = Gtk.CssProvider()
+    try:
+        if hasattr(provider, "load_from_string"):
+            provider.load_from_string(css)
+        else:
+            provider.load_from_data(css.encode("utf-8"))
+    except Exception:
+        fallback = build_css(FALLBACK_BG, FALLBACK_FG, FALLBACK_FG)
+        if hasattr(provider, "load_from_string"):
+            provider.load_from_string(fallback)
+        else:
+            provider.load_from_data(fallback.encode("utf-8"))
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+
+
+def _add_css_class(widget: Gtk.Widget, name: str) -> None:
+    if hasattr(widget, "add_css_class"):
+        widget.add_css_class(name)
+    else:
+        widget.get_style_context().add_class(name)
+
+
+def cpu_pct(prev: tuple[int, int] | None, cur: tuple[int, int]) -> float:
+    if prev is None:
+        return 0.0
+    d_busy = cur[0] - prev[0]
+    d_idle = cur[1] - prev[1]
+    total = d_busy + d_idle
+    if total <= 0:
+        return 0.0
+    return max(0.0, min(100.0, 100.0 * d_busy / total))
+
+
+def read_proc_stat() -> tuple[tuple[int, int] | None, dict[int, tuple[int, int]]]:
+    """overall (busy, idle) plus cpuN index -> (busy, idle). Core count is not hardcoded."""
+    overall = None
+    cores: dict[int, tuple[int, int]] = {}
+    try:
+        with open("/proc/stat", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None, {}
+    for line in lines:
+        if not line.startswith("cpu"):
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        try:
+            nums = [int(x) for x in parts[1:]]
+        except ValueError:
+            continue
+        while len(nums) < 7:
+            nums.append(0)
+        user, nice, system, idle, iowait, irq, softirq = nums[:7]
+        busy = user + nice + system + irq + softirq
+        idle_all = idle + iowait
+        sample = (busy, idle_all)
+        name = parts[0]
+        if name == "cpu":
+            overall = sample
+        elif name.startswith("cpu") and name[3:].isdigit():
+            cores[int(name[3:])] = sample
+    return overall, cores
+
+
+def read_cpu_temp() -> float | None:
+    base = Path("/sys/class/thermal")
+    try:
+        zones = list(base.iterdir())
+    except OSError:
+        return None
+    preferred: list[float] = []
+    cpu_named: list[float] = []
+    for zone in zones:
+        if not zone.name.startswith("thermal_zone"):
+            continue
+        try:
+            ztype = (zone / "type").read_text(encoding="utf-8").strip()
+            millideg = int((zone / "temp").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+        celsius = millideg / 1000.0
+        if ztype in PREFERRED_THERMAL:
+            preferred.append(celsius)
+        elif ztype.startswith("cpu"):
+            cpu_named.append(celsius)
+    if preferred:
+        return max(preferred)
+    if cpu_named:
+        return max(cpu_named)
+    return None
+
+
+def _run_fan_tool(argv0: str) -> str | None:
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    try:
+        proc = subprocess.run(
+            [argv0, "get-speed"],
+            capture_output=True,
+            text=True,
+            timeout=FAN_TIMEOUT,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+    except FileNotFoundError:
+        return None
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout or ""
+
+
+def read_fan_speeds() -> tuple[int | None, int | None]:
+    """Parse `Left Fan: N RPM` / `Right Fan: N RPM`. Never raises."""
+    candidates: list[str] = []
+    if os.path.isfile(FAN_BIN_PRIMARY) and os.access(FAN_BIN_PRIMARY, os.X_OK):
+        candidates.append(FAN_BIN_PRIMARY)
+    fallback = shutil.which("x1e-ec-tool")
+    if fallback and fallback not in candidates:
+        candidates.append(fallback)
+    for exe in candidates:
+        output = _run_fan_tool(exe)
+        if not output:
+            continue
+        left_m = LEFT_FAN_RE.search(output)
+        right_m = RIGHT_FAN_RE.search(output)
+        if left_m is None and right_m is None:
+            continue
+        left = int(left_m.group(1)) if left_m else None
+        right = int(right_m.group(1)) if right_m else None
+        return left, right
+    return None, None
+
+
+def fmt_rpm(rpm: int | None) -> str:
+    if rpm is None:
+        return EM_DASH
+    return f"{rpm} RPM"
+
+
+def fmt_bytes(num: int) -> str:
+    value = float(num)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{num} B"
+
+
+def _comm_from_stat(stat: str) -> tuple[str, list[str]] | None:
+    left = stat.find("(")
+    right = stat.rfind(")")
+    if left < 0 or right < left:
+        return None
+    comm = stat[left + 1 : right]
+    rest = stat[right + 1 :].split()
+    return comm, rest
+
+
+def _process_name(pid: int, comm: str) -> str:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return comm
+    if not raw or raw == b"\x00":
+        return comm
+    argv = [part.decode("utf-8", "replace") for part in raw.split(b"\x00") if part]
+    if not argv:
+        return comm
+    base = os.path.basename(argv[0])
+    if base.startswith("python") and len(argv) > 1 and not argv[1].startswith("-"):
+        return os.path.basename(argv[1])
+    return base or comm
+
+
+def _rss_bytes(pid: int, rest: list[str]) -> int:
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        with open(f"/proc/{pid}/statm", encoding="utf-8", errors="replace") as fh:
+            fields = fh.read().split()
+        if len(fields) >= 2:
+            return int(fields[1]) * PAGE_SIZE
+    except (OSError, ValueError):
+        pass
+    if len(rest) >= 22:
+        try:
+            return int(rest[21]) * PAGE_SIZE
+        except ValueError:
+            return 0
+    return 0
+
+
+def iter_processes() -> list[tuple[int, str, int, int, int]]:
+    """Return (pid, name, cpu_jiffies, rss_bytes, starttime). Skip EACCES quietly."""
+    results: list[tuple[int, str, int, int, int]] = []
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return results
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+                stat = fh.read()
+        except OSError:
+            continue
+        parsed = _comm_from_stat(stat)
+        if parsed is None:
+            continue
+        comm, rest = parsed
+        if len(rest) < 20:
+            continue
+        try:
+            utime = int(rest[11])
+            stime = int(rest[12])
+            starttime = int(rest[19])
+        except ValueError:
+            continue
+        rss = _rss_bytes(pid, rest)
+        results.append((pid, _process_name(pid, comm), utime + stime, rss, starttime))
+    return results
+
+
+def pid_alive(pid: int, starttime: int | None = None) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+            stat = fh.read()
+    except OSError:
+        return False
+    parsed = _comm_from_stat(stat)
+    if parsed is None:
+        return False
+    if starttime is None:
+        return True
+    rest = parsed[1]
+    if len(rest) < 20:
+        return True
+    try:
+        return int(rest[19]) == starttime
+    except ValueError:
+        return True
+
+
+class ConfirmDialog(Gtk.Window):
+    def __init__(
+        self,
+        parent: Gtk.Window,
+        heading: str,
+        body: str,
+        accept_label: str,
+        on_result,
+    ) -> None:
+        super().__init__(title=APP_TITLE, transient_for=parent, modal=True)
+        self.set_default_size(440, 150)
+        self.set_resizable(False)
+        self._on_result = on_result
+        self._decided = False
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        root.set_margin_top(14)
+        root.set_margin_bottom(14)
+        root.set_margin_start(16)
+        root.set_margin_end(16)
+
+        title = Gtk.Label(label=heading, xalign=0, wrap=True)
+        _add_css_class(title, "stat-value")
+        body_l = Gtk.Label(label=body, xalign=0, wrap=True)
+        _add_css_class(body_l, "dim")
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        buttons.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel")
+        accept = Gtk.Button(label=accept_label)
+        cancel.connect("clicked", self._cancel)
+        accept.connect("clicked", self._accept)
+        buttons.append(cancel)
+        buttons.append(accept)
+
+        root.append(title)
+        root.append(body_l)
+        root.append(buttons)
+        self.set_child(root)
+        self.connect("close-request", self._on_close)
+
+    def _finish(self, accepted: bool) -> None:
+        if self._decided:
+            return
+        self._decided = True
+        cb = self._on_result
+        self.destroy()
+        if cb is not None:
+            cb(accepted)
+
+    def _cancel(self, *_args) -> None:
+        self._finish(False)
+
+    def _accept(self, *_args) -> None:
+        self._finish(True)
+
+    def _on_close(self, *_args) -> bool:
+        self._finish(False)
+        return True
+
+
+class TaskManagerWindow(Gtk.ApplicationWindow):
+    def __init__(self, application: Gtk.Application) -> None:
+        super().__init__(application=application, title=APP_TITLE)
+        self.set_default_size(720, 520)
+        self.set_resizable(True)
+        _add_css_class(self, "omarchy-tm")
+        self.connect("map", self._on_map)
+
+        self._prev_overall: tuple[int, int] | None = None
+        self._prev_cores: dict[int, tuple[int, int]] = {}
+        self._core_ids: list[int] = []
+        self._prev_proc: dict[int, int] = {}
+        self._prev_total_jiffies: int | None = None
+        self._row_iters: dict[int, Gtk.TreeIter] = {}
+        self._core_bars: list[Gtk.ProgressBar] = []
+        self._fan_busy = False
+        self._filter_text = ""
+        self._tick_id = 0
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.set_margin_top(10)
+        root.set_margin_bottom(10)
+        root.set_margin_start(12)
+        root.set_margin_end(12)
+
+        stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        cpu_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        cpu_key = Gtk.Label(label="CPU", xalign=0)
+        cpu_key.set_width_chars(4)
+        _add_css_class(cpu_key, "dim")
+        self.cpu_value = Gtk.Label(label="0%", xalign=0)
+        self.cpu_value.set_width_chars(5)
+        _add_css_class(self.cpu_value, "stat-value")
+        self.cpu_bar = Gtk.ProgressBar()
+        self.cpu_bar.set_hexpand(True)
+        self.cpu_bar.set_valign(Gtk.Align.CENTER)
+        cpu_row.append(cpu_key)
+        cpu_row.append(self.cpu_value)
+        cpu_row.append(self.cpu_bar)
+
+        self.core_flow = Gtk.FlowBox()
+        self.core_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.core_flow.set_homogeneous(False)
+        self.core_flow.set_max_children_per_line(12)
+        self.core_flow.set_min_children_per_line(2)
+        self.core_flow.set_column_spacing(6)
+        self.core_flow.set_row_spacing(4)
+
+        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        temp_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        temp_key = Gtk.Label(label="Temp", xalign=0)
+        _add_css_class(temp_key, "dim")
+        self.temp_value = Gtk.Label(label=EM_DASH, xalign=0)
+        _add_css_class(self.temp_value, "stat-value")
+        temp_box.append(temp_key)
+        temp_box.append(self.temp_value)
+        fan_l_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        fan_l_key = Gtk.Label(label="Fan L", xalign=0)
+        _add_css_class(fan_l_key, "dim")
+        self.fan_left = Gtk.Label(label=EM_DASH, xalign=0)
+        _add_css_class(self.fan_left, "stat-value")
+        fan_l_box.append(fan_l_key)
+        fan_l_box.append(self.fan_left)
+        fan_r_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        fan_r_key = Gtk.Label(label="Fan R", xalign=0)
+        _add_css_class(fan_r_key, "dim")
+        self.fan_right = Gtk.Label(label=EM_DASH, xalign=0)
+        _add_css_class(self.fan_right, "stat-value")
+        fan_r_box.append(fan_r_key)
+        fan_r_box.append(self.fan_right)
+        meta.append(temp_box)
+        meta.append(fan_l_box)
+        meta.append(fan_r_box)
+
+        stats.append(cpu_row)
+        stats.append(self.core_flow)
+        stats.append(meta)
+
+        self.search = Gtk.Entry()
+        self.search.set_placeholder_text("Filter by name or PID")
+        self.search.connect("changed", self._on_search)
+
+        self.store = Gtk.ListStore(str, int, float, str, int, str)
+        self.filtered = self.store.filter_new()
+        self.filtered.set_visible_func(self._row_visible)
+        self.sorted = Gtk.TreeModelSort.new_with_model(self.filtered)
+        self.sorted.set_sort_column_id(COL_CPU, Gtk.SortType.DESCENDING)
+
+        self.tree = Gtk.TreeView(model=self.sorted)
+        self.tree.set_headers_clickable(True)
+        self.tree.set_enable_search(True)
+        self.tree.set_search_column(COL_NAME)
+        self.tree.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+        self.tree.get_selection().connect("changed", self._on_sel)
+        self.tree.connect("row-activated", self._on_row_activated)
+
+        name_r = Gtk.CellRendererText()
+        name_r.props.ellipsize = Pango.EllipsizeMode.END
+        name_col = Gtk.TreeViewColumn("Name", name_r, text=COL_NAME)
+        name_col.set_expand(True)
+        name_col.set_resizable(True)
+        name_col.set_sort_column_id(COL_NAME)
+        name_col.set_min_width(160)
+
+        pid_r = Gtk.CellRendererText()
+        pid_r.props.xalign = 1.0
+        pid_col = Gtk.TreeViewColumn("PID", pid_r, text=COL_PID)
+        pid_col.set_sort_column_id(COL_PID)
+        pid_col.set_min_width(70)
+        pid_col.set_alignment(1.0)
+
+        cpu_r = Gtk.CellRendererText()
+        cpu_r.props.xalign = 1.0
+        cpu_col = Gtk.TreeViewColumn("CPU %", cpu_r, text=COL_CPU_TXT)
+        cpu_col.set_sort_column_id(COL_CPU)
+        cpu_col.set_min_width(70)
+        cpu_col.set_alignment(1.0)
+
+        mem_r = Gtk.CellRendererText()
+        mem_r.props.xalign = 1.0
+        mem_col = Gtk.TreeViewColumn("Memory", mem_r, text=COL_RSS_TXT)
+        mem_col.set_sort_column_id(COL_RSS)
+        mem_col.set_min_width(90)
+        mem_col.set_alignment(1.0)
+
+        for col in (name_col, pid_col, cpu_col, mem_col):
+            self.tree.append_column(col)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        scroll.set_child(self.tree)
+
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.set_halign(Gtk.Align.END)
+        self.end_btn = Gtk.Button(label="End process")
+        self.end_btn.set_sensitive(False)
+        self.end_btn.connect("clicked", self._on_end_clicked)
+        footer.append(self.end_btn)
+
+        root.append(stats)
+        root.append(self.search)
+        root.append(scroll)
+        root.append(footer)
+        self.set_child(root)
+
+        self.connect("close-request", self._on_close)
+        self._tick()
+        self._tick_id = GLib.timeout_add(REFRESH_MS, self._tick)
+
+    def _on_map(self, *_args) -> None:
+        try:
+            self.unmaximize()
+        except Exception:
+            pass
+
+    def _on_close(self, *_args) -> bool:
+        if self._tick_id:
+            GLib.source_remove(self._tick_id)
+            self._tick_id = 0
+        return False
+
+    def _on_search(self, entry: Gtk.Entry) -> None:
+        self._filter_text = (entry.get_text() or "").strip().lower()
+        self.filtered.refilter()
+
+    def _row_visible(self, model, tree_iter, _data=None) -> bool:
+        needle = self._filter_text
+        if not needle:
+            return True
+        name = str(model.get_value(tree_iter, COL_NAME) or "").lower()
+        pid = str(model.get_value(tree_iter, COL_PID))
+        return needle in name or needle in pid
+
+    def _selected_row(self) -> tuple[int, str, int | None] | None:
+        model, tree_iter = self.tree.get_selection().get_selected()
+        if tree_iter is None:
+            return None
+        pid = int(model.get_value(tree_iter, COL_PID))
+        name = str(model.get_value(tree_iter, COL_NAME))
+        start = None
+        try:
+            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+                parsed = _comm_from_stat(fh.read())
+            if parsed and len(parsed[1]) >= 20:
+                start = int(parsed[1][19])
+        except (OSError, ValueError):
+            start = None
+        return pid, name, start
+
+    def _on_sel(self, *_args) -> None:
+        self.end_btn.set_sensitive(self._selected_row() is not None)
+
+    def _ensure_core_bars(self, ids: list[int]) -> None:
+        if ids == self._core_ids and len(self._core_bars) == len(ids):
+            return
+        if hasattr(self.core_flow, "remove_all"):
+            self.core_flow.remove_all()
+        else:
+            child = self.core_flow.get_first_child()
+            while child is not None:
+                nxt = child.get_next_sibling()
+                self.core_flow.remove(child)
+                child = nxt
+        self._core_bars = []
+        self._core_ids = list(ids)
+        for idx in ids:
+            cell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            lab = Gtk.Label(label=str(idx), xalign=1)
+            lab.set_width_chars(2)
+            _add_css_class(lab, "dim")
+            bar = Gtk.ProgressBar()
+            _add_css_class(bar, "cpu-core")
+            bar.set_valign(Gtk.Align.CENTER)
+            bar.set_hexpand(True)
+            cell.append(lab)
+            cell.append(bar)
+            self.core_flow.insert(cell, -1)
+            self._core_bars.append(bar)
+
+    def _apply_fan(self, left: int | None, right: int | None) -> bool:
+        try:
+            self.fan_left.set_text(fmt_rpm(left))
+            self.fan_right.set_text(fmt_rpm(right))
+        except Exception:
+            pass
+        self._fan_busy = False
+        return False
+
+    def _fan_worker(self) -> None:
+        left, right = None, None
+        try:
+            left, right = read_fan_speeds()
+        except Exception:
+            left, right = None, None
+        GLib.idle_add(self._apply_fan, left, right)
+
+    def _schedule_fan(self) -> None:
+        if self._fan_busy:
+            return
+        self._fan_busy = True
+        thread = threading.Thread(target=self._fan_worker, name="fan-rpm", daemon=True)
+        thread.start()
+
+    def _tick(self) -> bool:
+        try:
+            overall, cores = read_proc_stat()
+            self._refresh_cpu(overall, cores)
+            self._refresh_temp()
+            self._refresh_procs(overall, cores)
+            self._schedule_fan()
+        except Exception:
+            pass
+        return True
+
+    def _refresh_cpu(
+        self,
+        overall: tuple[int, int] | None,
+        cores: dict[int, tuple[int, int]],
+    ) -> None:
+        if overall is None:
+            return
+        pct = cpu_pct(self._prev_overall, overall)
+        self.cpu_value.set_text(f"{pct:.0f}%")
+        self.cpu_bar.set_fraction(pct / 100.0)
+        ids = sorted(cores)
+        self._ensure_core_bars(ids)
+        for i, idx in enumerate(ids):
+            cur = cores[idx]
+            prev = self._prev_cores.get(idx)
+            core_pct = cpu_pct(prev, cur)
+            self._core_bars[i].set_fraction(core_pct / 100.0)
+            self._core_bars[i].set_tooltip_text(f"cpu{idx}  {core_pct:.0f}%")
+        self._prev_overall = overall
+        self._prev_cores = cores
+
+    def _refresh_temp(self) -> None:
+        temp = read_cpu_temp()
+        if temp is None:
+            self.temp_value.set_text(EM_DASH)
+        else:
+            self.temp_value.set_text(f"{temp:.0f}°C")
+
+    def _refresh_procs(
+        self,
+        overall: tuple[int, int] | None,
+        cores: dict[int, tuple[int, int]],
+    ) -> None:
+        if overall is None:
+            return
+        total_jiffies = overall[0] + overall[1]
+        ncpu = max(1, len(cores))
+        prev_total = self._prev_total_jiffies
+        d_total = (
+            (total_jiffies - prev_total) if prev_total is not None else 0
+        )
+        selected = self._selected_row()
+        selected_pid = selected[0] if selected else None
+
+        live: set[int] = set()
+        seen_keys: set[tuple[int, int]] = set()
+        for pid, name, jiffies, rss, starttime in iter_processes():
+            live.add(pid)
+            key = (pid, starttime)
+            seen_keys.add(key)
+            cpu = 0.0
+            prev = self._prev_proc.get(key)
+            if prev is not None and d_total > 0:
+                cpu = 100.0 * (jiffies - prev) / d_total * ncpu
+                if cpu < 0:
+                    cpu = 0.0
+            self._prev_proc[key] = jiffies
+            cpu_txt = f"{cpu:.1f}"
+            rss_txt = fmt_bytes(rss)
+            tree_iter = self._row_iters.get(pid)
+            if tree_iter is None:
+                tree_iter = self.store.append(
+                    [name, pid, cpu, cpu_txt, rss, rss_txt]
+                )
+                self._row_iters[pid] = tree_iter
+            else:
+                self.store.set(
+                    tree_iter,
+                    COL_NAME,
+                    name,
+                    COL_PID,
+                    pid,
+                    COL_CPU,
+                    cpu,
+                    COL_CPU_TXT,
+                    cpu_txt,
+                    COL_RSS,
+                    rss,
+                    COL_RSS_TXT,
+                    rss_txt,
+                )
+
+        for pid in list(self._row_iters):
+            if pid not in live:
+                self.store.remove(self._row_iters[pid])
+                del self._row_iters[pid]
+                self._prev_proc.pop(pid, None)
+        for key in list(self._prev_proc):
+            if key not in seen_keys:
+                del self._prev_proc[key]
+
+        self._prev_total_jiffies = total_jiffies
+        if selected_pid is not None and selected_pid in self._row_iters:
+            try:
+                path = self.store.get_path(self._row_iters[selected_pid])
+                fpath = self.filtered.convert_child_path_to_path(path)
+                if fpath is not None:
+                    spath = self.sorted.convert_child_path_to_path(fpath)
+                    if spath is not None:
+                        self.tree.get_selection().select_path(spath)
+            except Exception:
+                pass
+
+    def _on_row_activated(self, *_args) -> None:
+        self._on_end_clicked()
+
+    def _on_end_clicked(self, *_args) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        pid, name, start = row
+        if pid <= 1 or pid == os.getpid():
+            self._alert("Cannot end this process", f"{name} (PID {pid}) is protected.")
+            return
+        ConfirmDialog(
+            self,
+            "End process?",
+            f"Send SIGTERM to {name} (PID {pid})?",
+            "End process",
+            lambda ok, p=pid, n=name, st=start: self._do_term(p, n, st) if ok else None,
+        ).present()
+
+    def _alert(self, heading: str, body: str) -> None:
+        ConfirmDialog(self, heading, body, "OK", lambda _ok: None).present()
+
+    def _do_term(self, pid: int, name: str, start: int | None) -> None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            self._alert("Permission denied", f"Cannot send SIGTERM to {name} (PID {pid}).")
+            return
+        except OSError as exc:
+            self._alert("Could not end process", f"{name} (PID {pid}): {exc}")
+            return
+        GLib.timeout_add(2000, self._check_after_term, pid, name, start)
+
+    def _check_after_term(self, pid: int, name: str, start: int | None) -> bool:
+        if not pid_alive(pid, start):
+            return False
+        ConfirmDialog(
+            self,
+            "Process still running",
+            f"{name} (PID {pid}) is still alive. Send SIGKILL?",
+            "Kill process",
+            lambda ok, p=pid, n=name, st=start: self._do_kill(p, n, st) if ok else None,
+        ).present()
+        return False
+
+    def _do_kill(self, pid: int, name: str, start: int | None) -> None:
+        if not pid_alive(pid, start):
+            return
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            self._alert("Permission denied", f"Cannot send SIGKILL to {name} (PID {pid}).")
+        except OSError as exc:
+            self._alert("Could not kill process", f"{name} (PID {pid}): {exc}")
+
+
+class TaskManagerApp(Gtk.Application):
+    def __init__(self) -> None:
+        flags = getattr(Gio.ApplicationFlags, "DEFAULT_FLAGS", None)
+        if flags is None:
+            flags = Gio.ApplicationFlags.FLAGS_NONE
+        super().__init__(application_id=APP_ID, flags=flags)
+        self._window: TaskManagerWindow | None = None
+
+    def do_startup(self) -> None:
+        Gtk.Application.do_startup(self)
+        apply_theme()
+
+    def do_activate(self) -> None:
+        if self._window is None:
+            self._window = TaskManagerWindow(application=self)
+        self._window.present()
+        try:
+            self._window.unmaximize()
+        except Exception:
+            pass
+
+
+def main() -> int:
+    app = TaskManagerApp()
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
