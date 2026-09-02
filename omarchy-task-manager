@@ -29,7 +29,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 REFRESH_MS = 1000
-FAN_TIMEOUT = 0.8
+FAN_TIMEOUT = 2.0
 EM_DASH = "\u2014"
 PREFERRED_THERMAL = (
     "cpu0-0-top-thermal",
@@ -263,6 +263,22 @@ def _add_css_class(widget: Gtk.Widget, name: str) -> None:
         widget.get_style_context().add_class(name)
 
 
+def half_monitor_size() -> tuple[int, int]:
+    """About half the primary monitor; used as GTK default before Hyprland rules apply."""
+    try:
+        display = Gdk.Display.get_default()
+        if display is None:
+            return 960, 540
+        monitors = display.get_monitors()
+        if monitors.get_n_items() <= 0:
+            return 960, 540
+        mon = monitors.get_item(0)
+        geo = mon.get_geometry()
+        return max(640, int(geo.width * 0.5)), max(400, int(geo.height * 0.5))
+    except Exception:
+        return 960, 540
+
+
 def cpu_pct(prev: tuple[int, int] | None, cur: tuple[int, int]) -> float:
     if prev is None:
         return 0.0
@@ -335,12 +351,12 @@ def read_cpu_temp() -> float | None:
     return None
 
 
-def _run_fan_tool(argv0: str) -> str | None:
+def _run_cmd(argv: list[str]) -> str | None:
     env = os.environ.copy()
     env["LC_ALL"] = "C"
     try:
         proc = subprocess.run(
-            [argv0, "get-speed"],
+            argv,
             capture_output=True,
             text=True,
             timeout=FAN_TIMEOUT,
@@ -354,31 +370,64 @@ def _run_fan_tool(argv0: str) -> str | None:
         return None
     except Exception:
         return None
-    if proc.returncode != 0:
+    return ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+
+
+def _parse_fan_text(output: str | None) -> tuple[int | None, int | None] | None:
+    if not output:
         return None
-    return proc.stdout or ""
+    left_m = LEFT_FAN_RE.search(output)
+    right_m = RIGHT_FAN_RE.search(output)
+    if left_m is None and right_m is None:
+        return None
+    left = int(left_m.group(1)) if left_m else None
+    right = int(right_m.group(1)) if right_m else None
+    return left, right
+
+
+def _hwmon_fan_speeds() -> tuple[int | None, int | None]:
+    """Fallback: first two fan*_input nodes under /sys/class/hwmon. None if absent."""
+    base = Path("/sys/class/hwmon")
+    try:
+        hwmons = sorted(base.iterdir())
+    except OSError:
+        return None, None
+    rpms: list[int] = []
+    for hw in hwmons:
+        for node in sorted(hw.glob("fan*_input")):
+            try:
+                raw = int(node.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                continue
+            if raw > 0:
+                rpms.append(raw)
+            if len(rpms) >= 2:
+                return rpms[0], rpms[1]
+    if not rpms:
+        return None, None
+    if len(rpms) == 1:
+        return rpms[0], None
+    return rpms[0], rpms[1]
 
 
 def read_fan_speeds() -> tuple[int | None, int | None]:
-    """Parse `Left Fan: N RPM` / `Right Fan: N RPM`. Never raises."""
-    candidates: list[str] = []
-    if os.path.isfile(FAN_BIN_PRIMARY) and os.access(FAN_BIN_PRIMARY, os.X_OK):
-        candidates.append(FAN_BIN_PRIMARY)
+    """x1e-ec-tool get-speed, then sudo -n, then hwmon. Never raises. Never sudo with a password."""
+    exes: list[str] = []
+    if os.path.isfile(FAN_BIN_PRIMARY):
+        exes.append(FAN_BIN_PRIMARY)
     fallback = shutil.which("x1e-ec-tool")
-    if fallback and fallback not in candidates:
-        candidates.append(fallback)
-    for exe in candidates:
-        output = _run_fan_tool(exe)
-        if not output:
-            continue
-        left_m = LEFT_FAN_RE.search(output)
-        right_m = RIGHT_FAN_RE.search(output)
-        if left_m is None and right_m is None:
-            continue
-        left = int(left_m.group(1)) if left_m else None
-        right = int(right_m.group(1)) if right_m else None
-        return left, right
-    return None, None
+    if fallback and fallback not in exes:
+        exes.append(fallback)
+    for exe in exes:
+        parsed = _parse_fan_text(_run_cmd([exe, "get-speed"]))
+        if parsed is not None:
+            return parsed
+        sudo = shutil.which("sudo")
+        if sudo:
+            parsed = _parse_fan_text(_run_cmd([sudo, "-n", exe, "get-speed"]))
+            if parsed is not None:
+                return parsed
+    return _hwmon_fan_speeds()
 
 
 def fmt_rpm(rpm: int | None) -> str:
@@ -565,7 +614,7 @@ class ConfirmDialog(Gtk.Window):
 class TaskManagerWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application) -> None:
         super().__init__(application=application, title=APP_TITLE)
-        self.set_default_size(720, 520)
+        self.set_default_size(*half_monitor_size())
         self.set_resizable(True)
         _add_css_class(self, "omarchy-tm")
         self.connect("map", self._on_map)

@@ -5,7 +5,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DST="${HOME}/.local/bin/omarchy-task-manager"
 DESKTOP_DST="${HOME}/.local/share/applications/omarchy-task-manager.desktop"
+HYPR_DIR="${HOME}/.config/hypr"
+AUTOSTART_LUA="${HYPR_DIR}/autostart.lua"
+HYPRLAND_LUA="${HYPR_DIR}/hyprland.lua"
 PKGS=(python python-gobject gtk4)
+CLASS="art.sw.omarchy.TaskManager"
 
 install_deps() {
   command -v pacman >/dev/null 2>&1 || return 0
@@ -38,6 +42,64 @@ install_deps() {
   echo "Continuing with the app install."
 }
 
+upsert_lua_block() {
+  local file="$1"
+  mkdir -p "$(dirname "${file}")"
+  python3 - "$file" "$BIN_DST" "$CLASS" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+bin_dst = sys.argv[2]
+klass = sys.argv[3]
+begin = "-- omarchy-task-manager begin"
+end = "-- omarchy-task-manager end"
+snippet = "\n".join(
+    [
+        begin,
+        "-- Bottom-right quarter + start with the Hyprland session.",
+        f'o.launch_on_start("{bin_dst}")',
+        f'o.window("{klass}", {{',
+        "  float = true,",
+        '  size = { "monitor_w * 0.5", "monitor_h * 0.5" },',
+        '  move = { "monitor_w * 0.5", "monitor_h * 0.5" },',
+        "})",
+        end,
+        "",
+    ]
+)
+
+if path.exists():
+    text = path.read_text(encoding="utf-8")
+else:
+    text = "-- Extra autostart processes.\n"
+
+out = []
+skip = False
+for line in text.splitlines(True):
+    stripped = line.rstrip("\n")
+    if stripped == begin:
+        skip = True
+        continue
+    if skip and stripped == end:
+        skip = False
+        continue
+    if skip:
+        continue
+    out.append(line)
+body = "".join(out).rstrip() + "\n\n" + snippet
+path.write_text(body, encoding="utf-8")
+PY
+}
+
+ensure_hyprland_requires_autostart() {
+  [[ -f "${HYPRLAND_LUA}" ]] || return 0
+  if grep -qE 'require\(["'"'"']hypr\.autostart["'"'"']\)' "${HYPRLAND_LUA}"; then
+    return 0
+  fi
+  printf '\nrequire("hypr.autostart")\n' >> "${HYPRLAND_LUA}"
+}
+
 install_deps
 
 install -Dm755 "${ROOT}/omarchy-task-manager" "${BIN_DST}"
@@ -51,6 +113,11 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "${HOME}/.local/share/applications" >/dev/null 2>&1 || true
 fi
 
+upsert_lua_block "${AUTOSTART_LUA}"
+ensure_hyprland_requires_autostart
+
 echo "Installed Task Manager."
 echo "Launch: ${BIN_DST}"
 echo "Or open \"Task Manager\" from Walker / the application menu."
+echo "Hyprland: autostart + bottom-right quarter in ${AUTOSTART_LUA}"
+echo "Reload with: hyprctl reload"
