@@ -1,7 +1,8 @@
 pkgbase = omarchy-task-manager
-	pkgdesc = GTK4 CPU, temperature, fan, and process monitor for Omarchy
+	pkgname = omarchy-task-manager
 	pkgver = 0.1.0
 	pkgrel = 1
+	pkgdesc = Omarchy-themed GTK4 task manager
 	url = https://github.com/HurlyDesousa/omarchy-task-manager
 	arch = any
 	license = MIT
@@ -10,7 +11,7 @@ pkgbase = omarchy-task-manager
 	depends = gtk4
 	source = omarchy-task-manager
 	source = omarchy-task-manager.desktop
+	source = LICENSE
 	md5sums = SKIP
 	md5sums = SKIP
-
-pkgname = omarchy-task-manager
+	md5sums = SKIP

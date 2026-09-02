@@ -1,7 +1,13 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.Python
+.venv/
+venv/
 pkg/
 src/
 *.pkg.tar.*
 *.pkg.tar
+.DS_Store
+*~
+*.swp

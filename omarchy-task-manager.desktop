@@ -1,10 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Task Manager
-Comment=Monitor CPU, temperature, fans, and processes
-Exec=/usr/bin/omarchy-task-manager
+Comment=CPU, temperature, fans, and processes for Omarchy
+Exec=omarchy-task-manager
 Icon=utilities-system-monitor
 Terminal=false
-Categories=System;Monitor;
+StartupNotify=true
 StartupWMClass=art.sw.omarchy.TaskManager
-Keywords=system;process;cpu;monitor;htop;task;
+Categories=System;Monitor;
+Keywords=cpu;process;fan;monitor;htop;system;
