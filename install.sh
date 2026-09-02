@@ -47,6 +47,7 @@ upsert_lua_block() {
   mkdir -p "$(dirname "${file}")"
   python3 - "$file" "$BIN_DST" "$CLASS" <<'PY'
 import pathlib
+import re
 import sys
 
 path = pathlib.Path(sys.argv[1])
@@ -74,6 +75,7 @@ if path.exists():
 else:
     text = "-- Extra autostart processes.\n"
 
+# Drop a previous marked block, if any.
 out = []
 skip = False
 for line in text.splitlines(True):
@@ -87,8 +89,33 @@ for line in text.splitlines(True):
     if skip:
         continue
     out.append(line)
-body = "".join(out).rstrip() + "\n\n" + snippet
+
+# Drop unlabeled copies of this app's launch/window (laptop already live).
+kept = []
+i = 0
+class_open = re.compile(
+    r'o\.window\(\s*["\']' + re.escape(klass) + r'["\']'
+)
+while i < len(out):
+    raw = out[i]
+    stripped = raw.strip()
+    if "o.launch_on_start" in stripped and "omarchy-task-manager" in stripped:
+        i += 1
+        continue
+    if class_open.search(stripped):
+        depth = raw.count("{") - raw.count("}")
+        i += 1
+        while i < len(out) and depth > 0:
+            raw = out[i]
+            depth += raw.count("{") - raw.count("}")
+            i += 1
+        continue
+    kept.append(out[i])
+    i += 1
+
+body = "".join(kept).rstrip() + "\n\n" + snippet
 path.write_text(body, encoding="utf-8")
+
 PY
 }
 

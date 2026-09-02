@@ -45,6 +45,8 @@ o.window("art.sw.omarchy.TaskManager", {
 -- omarchy-task-manager end
 ```
 
+Re-running `install.sh` replaces that marked block in place. If the laptop already has an unlabeled `o.launch_on_start` / `o.window` for this app, those copies are removed first so you never get a second launch. Other entries in `autostart.lua` are left alone.
+
 Omarchy already `require("hypr.autostart")` from `hyprland.lua`. Size and move are 50% of the monitor, so the window sits in the bottom-right quarter. The GTK window also defaults to about half the primary monitor before those rules apply.
 
 ## What it shows
