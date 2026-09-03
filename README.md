@@ -1,6 +1,6 @@
 # omarchy-task-manager
 
-Native GTK4 task manager for Omarchy: compact CPU/thermal/fan strip by default, optional expandable process list, fan profile control on ASUS Vivobook S 15, and live Omarchy theme colors.
+Native GTK4 task manager v3 for Omarchy: CPU/GPU stats, thermals, fan profiles, compact mode, settings, and a searchable process table.
 
 Application id: `art.sw.omarchy.TaskManager`
 
@@ -12,44 +12,71 @@ cd omarchy-task-manager
 ./install.sh
 ```
 
-That installs `python`, `python-gobject`, and `gtk4` if needed (never blocks on a sudo password), copies the app to `~/.local/bin/omarchy-task-manager`, installs a desktop entry with a full `Exec=` path so Walker finds it with no PATH hacks, and merges a marked block into `~/.config/hypr/autostart.lua` so the app starts with the Hyprland session and floats in a bottom-right strip. Safe to re-run.
+Installs `python`, `python-gobject`, and `gtk4` if needed, copies the app to `~/.local/bin/omarchy-task-manager`, installs a desktop entry, and writes a marked block into `~/.config/hypr/autostart.lua` so the app starts with the Hyprland session and floats in the bottom-right corner. Safe to re-run.
 
-Then open Walker and search for **Task Manager**, or `hyprctl reload` and log in again for autostart.
+Open Walker and search for **Task Manager**, or `hyprctl reload` and log in again for autostart.
 
 ### Or as a package
-
-From the same clone:
 
 ```bash
 makepkg -si
 ```
 
-Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip. `makepkg` installs the binary only; run `./install.sh` as well if you want the Hyprland autostart + window rules.
+Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip.
 
-## Compact layout
+## What it shows
 
-By default the window shows CPU (overall + per-core), temperature, fan RPM (Fan L / Fan R), and four fan profile buttons. The process table is hidden until you click **Processes ▾**; click **Processes ▴** to collapse back to the compact strip. Expanding grows the GTK window and uses `hyprctl dispatch resizewindowpixel` to reach 50%×50% in the bottom-right; collapsing returns to the compact 50%×25% strip. Because no persistent Hyprland `size` rule is written, both resize steps work without the window being clamped. Process data keeps refreshing while collapsed so the first expand is not an empty flash.
+- **CPU** % from `/proc/stat` (core count not hardcoded), per-core bars
+- **CPU temp**: max of `cpu0-0-top-thermal` / `cpu1-0-top-thermal` / `cpu2-0-top-thermal`, else hottest `cpu*` thermal zone
+- **GPU** % from `/sys/class/devfreq/3d00000.gpu` `cur_freq / max_freq` (Snapdragon X Elite, `simple_ondemand` governor). Em-dash if absent.
+- **GPU temp**: max of `gpuss_0_thermal … gpuss_7_thermal` hwmon sensors (`temp1_input / 1000 °C`), shown in the GPU row. Em-dash if absent.
+- **Fan L / Fan R** RPM via `x1e-ec-tool get-speed` (or `sudo -n`, or hwmon `fan*_input`)
+- **Fan profiles** — four one-click buttons (see below)
+- **Process table**: name, PID, CPU %, RSS — sortable, searchable; End process is SIGTERM then SIGKILL
+- **Colors** from `~/.local/state/omarchy/current/theme/colors.toml` (live-reload via Gio directory monitor), JetBrainsMono Nerd Font, GTK/dark fallback
 
-## Fans (Vivobook S 15)
+## Fan profiles
 
-Uses `/usr/local/bin/x1e-ec-tool` (or `x1e-ec-tool` on PATH).
+Four buttons sit below the thermal/fan readout. They call `x1e-ec-tool` directly using `mode` + `set-speed` — never `profile`/`profile get`/`get-profile`. Does not stop `x1e-ec-tool.service`.
 
-**RPM:** `get-speed` as the user, then `sudo -n get-speed` if i2c access fails, then hwmon `fan*_input` fallback. Parses `Left Fan: N RPM` / `Right Fan: N RPM` from stdout and stderr.
+| Label | Commands |
+|---|---|
+| Battery saver | `mode manual` → `set-speed 1800` |
+| Balance | `mode auto` (ec-service temp-loop owns RPM) |
+| Performance | `mode manual` → `set-speed 4500` |
+| Full speed | `mode manual` → `set-speed 8000` |
 
-**Profiles** (EC register `0x24`; does not stop `x1e-ec-tool.service`):
+After applying, `get-speed` is called; actual RPM appears in a 5 s auto-clearing status line. Errors surface in red. `hurly` needs to be in the `i2c` group (or `sudo -n` must work). Last-used profile saved to `~/.local/state/omarchy/task-manager/fan-profile`.
 
-| Button | `x1e-ec-tool profile N` | EC mode |
-|--------|-------------------------|---------|
-| Battery saver | 0 | Whisper |
-| Balance | 1 | Standard |
-| Performance | 2 | Performance |
-| Full speed | 3 | Full speed |
+## Compact / expand
 
-Runs `x1e-ec-tool profile N` as the user first, then `sudo -n` with the same command if needed. The active-profile highlight comes from the **last successful set** (persisted to `~/.local/state/omarchy/task-manager/fan-profile`). If no set has been made yet the app tries `x1e-ec-tool status` (non-mutating) as a one-time fallback — it never calls `get-profile` or `profile get`, which are not safe read-only on this EC. A failed set surfaces in a short status message below the buttons; it never silently discards the error.
+Click **Processes ▾** to show the process table (expand). Click **Processes ▴** to hide it (collapse). Window geometry is applied via the Hyprland 0.56.1 Lua eval API:
+
+```
+hyprctl eval 'hl.dsp.window.resize({ x = W, y = H })'
+hyprctl eval 'hl.dsp.window.move({ x = X, y = Y })'
+```
+
+Compact: 50 % × 25 % of monitor (bottom-right quarter).  
+Expanded: 50 % × 50 % of monitor (bottom-right half).
+
+## Settings (⚙)
+
+The gear button to the right of the Processes toggle opens a popover:
+
+| Option | Effect |
+|---|---|
+| Start compact | Always open collapsed |
+| Remember last state | Restore compact/expanded across sessions |
+| Refresh interval | 500 ms / 1 s / 2 s / 5 s — updates the live timer |
+| Show GPU row | Hides/shows the GPU % + temp row |
+| Pin to bottom-right | Move to bottom-right on expand |
+
+Settings saved to `~/.local/state/omarchy/task-manager/prefs.json`.
 
 ## Hyprland
 
-`install.sh` idempotently merges this marked block into `~/.config/hypr/autostart.lua` (`BIN` is the full `~/.local/bin/omarchy-task-manager` path):
+`install.sh` inserts this block into `~/.config/hypr/autostart.lua`:
 
 ```lua
 -- omarchy-task-manager begin
@@ -62,14 +89,4 @@ o.window("art.sw.omarchy.TaskManager", {
 -- omarchy-task-manager end
 ```
 
-No `size` rule is written. The compact GTK default (`quarter_monitor_size()`) provides the initial strip height; Hyprland never clamps the window, so clicking **Processes ▾** can freely resize to 50 × 50 %. Re-running `install.sh` replaces the marked block in place. Unlabeled `o.launch_on_start` / `o.window` entries for this app are removed first so you never get a duplicate launch. Other autostart lines are untouched.
-
-Omarchy already `require("hypr.autostart")` from `hyprland.lua`; `install.sh` only appends that require if missing.
-
-## Theme
-
-Live Omarchy theme files live under `~/.local/state/omarchy/current/theme/` (symlink; `btop.theme`, `colors.toml`, `waybar.css`). The app watches `~/.local/state/omarchy` (with move events) plus the live theme path so atomic Omarchy `current/` swaps still reapply CSS without restart. Colors come from loaded `colors.toml` / `waybar.css` plus GTK named colors, with Adwaita-dark fallbacks when files are absent.
-
-## Process list (expanded)
-
-When expanded: name, PID, CPU %, RSS — sort and search; **End process** sends SIGTERM, then SIGKILL if still alive.
+No `size` rule — the app manages its own dimensions. Re-running `install.sh` replaces the marked block in-place.
