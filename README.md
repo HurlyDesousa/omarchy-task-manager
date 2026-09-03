@@ -28,7 +28,7 @@ Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip. `makepkg` install
 
 ## Compact layout
 
-By default the window shows CPU (overall + per-core), temperature, fan RPM (Fan L / Fan R), and four fan profile buttons. The process table is hidden until you click **Processes ▾**; click **Processes ▴** to collapse back to the compact strip. Compact mode keeps the process tree out of the GTK widget tree so the window can fit a 25%-height Hyprland strip; expanding grows the window for a usable list.
+By default the window shows CPU (overall + per-core), temperature, fan RPM (Fan L / Fan R), and four fan profile buttons. The process table is hidden until you click **Processes ▾**; click **Processes ▴** to collapse back to the compact strip. Expanding grows the GTK window and asks Hyprland (via `hyprctl`) to resize to 50%×50% in the bottom-right so the list is not clipped by the compact 25% strip rule. Collapsing returns to 50%×25%. Process data keeps refreshing while collapsed so the first expand is not an empty flash.
 
 ## Fans (Vivobook S 15)
 
@@ -45,7 +45,7 @@ Uses `/usr/local/bin/x1e-ec-tool` (or `x1e-ec-tool` on PATH).
 | Performance | 2 | Performance |
 | Full speed | 3 | Full speed |
 
-Runs `x1e-ec-tool profile N` as the user first, then `sudo -n` with the same command if needed. The active profile is highlighted. Missing tool or permission errors show in the UI flow without crashing the app.
+Runs `x1e-ec-tool profile N` as the user first, then `sudo -n` with the same command if needed. Reading the active profile uses read-only commands only (`get-profile`, `profile get`, or `status` output) — never bare `x1e-ec-tool profile`, which can write the EC. The active profile is highlighted; a failed set shows a short status message and leaves the previous highlight.
 
 ## Hyprland
 
@@ -69,7 +69,7 @@ Omarchy already `require("hypr.autostart")` from `hyprland.lua`; `install.sh` on
 
 ## Theme
 
-Live Omarchy theme files live under `~/.local/state/omarchy/current/theme/` (symlink; `btop.theme`, `colors.toml`, `waybar.css`). The app watches that directory with Gio and reapplies CSS on theme switches without restart. Colors come from loaded `colors.toml` / `waybar.css` plus GTK named colors, with Adwaita-dark fallbacks when files are absent.
+Live Omarchy theme files live under `~/.local/state/omarchy/current/theme/` (symlink; `btop.theme`, `colors.toml`, `waybar.css`). The app watches `~/.local/state/omarchy` (with move events) plus the live theme path so atomic Omarchy `current/` swaps still reapply CSS without restart. Colors come from loaded `colors.toml` / `waybar.css` plus GTK named colors, with Adwaita-dark fallbacks when files are absent.
 
 ## Process list (expanded)
 
