@@ -39,7 +39,21 @@ PREFERRED_THERMAL = (
 FALLBACK_BG = "#1a1a1a"
 FALLBACK_FG = "#c8c8c8"
 FAN_BIN_PRIMARY = "/usr/local/bin/x1e-ec-tool"
-THEME_DIR = Path.home() / ".config" / "omarchy" / "current" / "theme"
+THEME_DIR = Path.home() / ".local" / "state" / "omarchy" / "current" / "theme"
+PROFILE_STATE = (
+    Path.home() / ".local" / "state" / "omarchy" / "task-manager" / "fan-profile"
+)
+# UI label, x1e-ec-tool profile index (Whisper/Standard/Performance/Full speed).
+FAN_PROFILES: tuple[tuple[str, int], ...] = (
+    ("Battery saver", 0),
+    ("Balance", 1),
+    ("Performance", 2),
+    ("Full speed", 3),
+)
+PROFILE_NAME_RE = re.compile(
+    r"(?:profile|mode)\s*(?:is\s*)?(?:set\s+to\s+)?(\d+)",
+    re.IGNORECASE,
+)
 
 COL_NAME, COL_PID, COL_CPU, COL_CPU_TXT, COL_RSS, COL_RSS_TXT = range(6)
 
@@ -117,22 +131,44 @@ def _load_waybar_css(path: Path) -> dict[str, str]:
     return out
 
 
+def _gtk_named_colors() -> tuple[str, str, str]:
+    """GTK / Adwaita-dark named colors when Omarchy theme files are absent."""
+    try:
+        settings = Gtk.Settings.get_default()
+        if settings:
+            theme = str(settings.get_property("gtk-theme-name") or "")
+            prefer_dark = bool(settings.get_property("gtk-application-prefer-dark-theme"))
+            if prefer_dark or "dark" in theme.lower():
+                return FALLBACK_BG, FALLBACK_FG, FALLBACK_FG
+            return "#f6f5f4", "#2e3436", "#3584e4"
+    except Exception:
+        pass
+    return FALLBACK_BG, FALLBACK_FG, FALLBACK_FG
+
+
 def load_theme_colors() -> tuple[str, str, str]:
+    gtk_bg, gtk_fg, gtk_accent = _gtk_named_colors()
     colors: dict[str, str] = {}
-    toml_path = THEME_DIR / "colors.toml"
-    css_path = THEME_DIR / "waybar.css"
+    theme_root = THEME_DIR
+    try:
+        if theme_root.is_symlink():
+            theme_root = theme_root.resolve()
+    except OSError:
+        pass
+    toml_path = theme_root / "colors.toml"
+    css_path = theme_root / "waybar.css"
     if toml_path.is_file():
         colors.update(_load_colors_toml(toml_path))
     if css_path.is_file():
         colors.update(_load_waybar_css(css_path))
-    bg = _css_color(colors.get("background"), FALLBACK_BG)
-    fg = _css_color(colors.get("foreground"), FALLBACK_FG)
+    bg = _css_color(colors.get("background"), gtk_bg)
+    fg = _css_color(colors.get("foreground"), gtk_fg)
     accent = _css_color(
         colors.get("accent")
         or colors.get("color4")
         or colors.get("blue")
         or colors.get("theme-blue"),
-        fg,
+        gtk_accent,
     )
     return bg, fg, accent
 
@@ -200,6 +236,19 @@ button:hover {{
 button:disabled {{
   opacity: 0.45;
 }}
+button.profile-active {{
+  background-color: {accent};
+  color: {bg};
+  border-color: {accent};
+}}
+button.profile-active:hover {{
+  background-color: {accent};
+  color: {bg};
+}}
+button.expand-toggle {{
+  min-height: 24px;
+  padding: 2px 10px;
+}}
 treeview {{
   background-color: {bg};
   color: {fg};
@@ -240,20 +289,55 @@ def _provider_load(provider: Gtk.CssProvider, css: str) -> None:
         provider.load_from_data(data, len(data))
 
 
+_THEME_PROVIDER: Gtk.CssProvider | None = None
+
+
 def apply_theme() -> None:
+    global _THEME_PROVIDER
     bg, fg, accent = load_theme_colors()
     css = build_css(bg, fg, accent)
-    provider = Gtk.CssProvider()
+    if _THEME_PROVIDER is None:
+        _THEME_PROVIDER = Gtk.CssProvider()
     try:
-        _provider_load(provider, css)
+        _provider_load(_THEME_PROVIDER, css)
     except Exception:
-        _provider_load(provider, build_css(FALLBACK_BG, FALLBACK_FG, FALLBACK_FG))
+        _provider_load(
+            _THEME_PROVIDER, build_css(FALLBACK_BG, FALLBACK_FG, FALLBACK_FG)
+        )
     display = Gdk.Display.get_default()
     if display is None:
         return
     Gtk.StyleContext.add_provider_for_display(
-        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        display, _THEME_PROVIDER, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
+
+
+def watch_theme_dir(on_change) -> Gio.FileMonitor | None:
+    """Watch Omarchy live theme dir; on_change is called on the main loop."""
+    path = THEME_DIR
+    try:
+        if not path.exists() and not path.is_symlink():
+            parent = path.parent
+            if parent.is_dir():
+                path = parent
+            else:
+                return None
+    except OSError:
+        return None
+    gfile = Gio.File.new_for_path(str(path))
+    try:
+        monitor = gfile.monitor_directory(Gio.FileMonitorFlags.NONE, None)
+    except (GLib.Error, TypeError, AttributeError):
+        try:
+            monitor = gfile.monitor(Gio.FileMonitorFlags.NONE, None)
+        except Exception:
+            return None
+
+    def _changed(*_args) -> None:
+        GLib.idle_add(on_change)
+
+    monitor.connect("changed", _changed)
+    return monitor
 
 
 def _add_css_class(widget: Gtk.Widget, name: str) -> None:
@@ -263,8 +347,24 @@ def _add_css_class(widget: Gtk.Widget, name: str) -> None:
         widget.get_style_context().add_class(name)
 
 
-def half_monitor_size() -> tuple[int, int]:
-    """About half the primary monitor; used as GTK default before Hyprland rules apply."""
+def quarter_monitor_size() -> tuple[int, int]:
+    """Half width, quarter height — matches Hyprland compact strip before rules apply."""
+    try:
+        display = Gdk.Display.get_default()
+        if display is None:
+            return 960, 270
+        monitors = display.get_monitors()
+        if monitors.get_n_items() <= 0:
+            return 960, 270
+        mon = monitors.get_item(0)
+        geo = mon.get_geometry()
+        return max(480, int(geo.width * 0.5)), max(180, int(geo.height * 0.25))
+    except Exception:
+        return 960, 270
+
+
+def expanded_monitor_size() -> tuple[int, int]:
+    """Larger default when the process list is expanded."""
     try:
         display = Gdk.Display.get_default()
         if display is None:
@@ -410,14 +510,117 @@ def _hwmon_fan_speeds() -> tuple[int | None, int | None]:
     return rpms[0], rpms[1]
 
 
+def _fan_executable() -> str | None:
+    if os.path.isfile(FAN_BIN_PRIMARY):
+        return FAN_BIN_PRIMARY
+    return shutil.which("x1e-ec-tool")
+
+
+def _run_fan_cmd(argv: list[str]) -> tuple[int, str]:
+    """Run fan tool; return (exit code, combined stdout+stderr). Never prompts for sudo."""
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=FAN_TIMEOUT,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+    except FileNotFoundError:
+        return 127, ""
+    except (subprocess.TimeoutExpired, OSError):
+        return 1, ""
+    output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    return proc.returncode, output
+
+
+def _parse_profile_index(output: str) -> int | None:
+    if not output:
+        return None
+    m = PROFILE_NAME_RE.search(output)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    for _label, idx in FAN_PROFILES:
+        if re.search(rf"\b{re.escape(_label)}\b", output, re.I):
+            return idx
+    names = ("Whisper", "Standard", "Performance", "Full speed")
+    for idx, name in enumerate(names):
+        if re.search(rf"\b{re.escape(name)}\b", output, re.I):
+            return idx
+    return None
+
+
+def _load_saved_profile() -> int | None:
+    try:
+        raw = PROFILE_STATE.read_text(encoding="utf-8").strip()
+        idx = int(raw)
+        if 0 <= idx < len(FAN_PROFILES):
+            return idx
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _save_profile_index(idx: int) -> None:
+    try:
+        PROFILE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        PROFILE_STATE.write_text(str(idx), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def read_fan_profile() -> int | None:
+    """Best-effort active profile index; uses last successful set if unreadable."""
+    exe = _fan_executable()
+    if exe:
+        for argv in ([exe, "get-profile"], [exe, "profile"]):
+            _code, output = _run_fan_cmd(argv)
+            parsed = _parse_profile_index(output)
+            if parsed is not None:
+                return parsed
+            sudo = shutil.which("sudo")
+            if sudo:
+                _code, output = _run_fan_cmd([sudo, "-n", exe, *argv[1:]])
+                parsed = _parse_profile_index(output)
+                if parsed is not None:
+                    return parsed
+    return _load_saved_profile()
+
+
+def set_fan_profile_index(profile: int) -> tuple[bool, str]:
+    """Set EC profile via x1e-ec-tool profile N (user, then sudo -n). Never stops the service."""
+    if profile < 0 or profile >= len(FAN_PROFILES):
+        return False, "Invalid profile"
+    exe = _fan_executable()
+    if not exe:
+        return False, "x1e-ec-tool not found"
+    attempts: list[list[str]] = [[exe, "profile", str(profile)]]
+    sudo = shutil.which("sudo")
+    if sudo:
+        attempts.append([sudo, "-n", exe, "profile", str(profile)])
+    last_output = ""
+    for cmd in attempts:
+        code, output = _run_fan_cmd(cmd)
+        last_output = output
+        if code == 0 or re.search(r"Setting profile to", output, re.I):
+            _save_profile_index(profile)
+            return True, output
+    return False, last_output or "Could not set fan profile"
+
+
 def read_fan_speeds() -> tuple[int | None, int | None]:
     """x1e-ec-tool get-speed, then sudo -n, then hwmon. Never raises. Never sudo with a password."""
+    exe = _fan_executable()
     exes: list[str] = []
-    if os.path.isfile(FAN_BIN_PRIMARY):
-        exes.append(FAN_BIN_PRIMARY)
-    fallback = shutil.which("x1e-ec-tool")
-    if fallback and fallback not in exes:
-        exes.append(fallback)
+    if exe:
+        exes.append(exe)
     for exe in exes:
         parsed = _parse_fan_text(_run_cmd([exe, "get-speed"]))
         if parsed is not None:
@@ -614,7 +817,7 @@ class ConfirmDialog(Gtk.Window):
 class TaskManagerWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application) -> None:
         super().__init__(application=application, title=APP_TITLE)
-        self.set_default_size(*half_monitor_size())
+        self.set_default_size(*quarter_monitor_size())
         self.set_resizable(True)
         _add_css_class(self, "omarchy-tm")
         self.connect("map", self._on_map)
@@ -627,16 +830,20 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._row_iters: dict[int, Gtk.TreeIter] = {}
         self._core_bars: list[Gtk.ProgressBar] = []
         self._fan_busy = False
+        self._profile_busy = False
+        self._active_profile: int | None = read_fan_profile()
+        self._profile_buttons: dict[int, Gtk.Button] = {}
         self._filter_text = ""
         self._tick_id = 0
+        self._expanded = False
 
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        root.set_margin_top(10)
-        root.set_margin_bottom(10)
-        root.set_margin_start(12)
-        root.set_margin_end(12)
+        self._root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._root.set_margin_top(8)
+        self._root.set_margin_bottom(8)
+        self._root.set_margin_start(12)
+        self._root.set_margin_end(12)
 
-        stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         cpu_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         cpu_key = Gtk.Label(label="CPU", xalign=0)
         cpu_key.set_width_chars(4)
@@ -685,9 +892,27 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         meta.append(fan_l_box)
         meta.append(fan_r_box)
 
+        profile_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        profile_row.set_homogeneous(True)
+        for label, idx in FAN_PROFILES:
+            btn = Gtk.Button(label=label)
+            btn.set_hexpand(True)
+            btn.connect("clicked", self._on_profile_clicked, idx)
+            self._profile_buttons[idx] = btn
+            profile_row.append(btn)
+
+        expand_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.expand_btn = Gtk.Button(label="Processes \u25be")
+        _add_css_class(self.expand_btn, "expand-toggle")
+        self.expand_btn.set_halign(Gtk.Align.START)
+        self.expand_btn.connect("clicked", self._toggle_processes)
+        expand_row.append(self.expand_btn)
+
         stats.append(cpu_row)
         stats.append(self.core_flow)
         stats.append(meta)
+        stats.append(profile_row)
+        stats.append(expand_row)
 
         self.search = Gtk.Entry()
         self.search.set_placeholder_text("Filter by name or PID")
@@ -742,6 +967,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
+        scroll.set_min_content_height(160)
         scroll.set_child(self.tree)
 
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -751,11 +977,14 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self.end_btn.connect("clicked", self._on_end_clicked)
         footer.append(self.end_btn)
 
-        root.append(stats)
-        root.append(self.search)
-        root.append(scroll)
-        root.append(footer)
-        self.set_child(root)
+        self._process_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._process_box.append(self.search)
+        self._process_box.append(scroll)
+        self._process_box.append(footer)
+
+        self._root.append(stats)
+        self.set_child(self._root)
+        self._update_profile_highlight()
 
         self.connect("close-request", self._on_close)
         self._tick()
@@ -766,6 +995,54 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             self.unmaximize()
         except Exception:
             pass
+        if not self._expanded:
+            w, h = quarter_monitor_size()
+            self.set_default_size(w, h)
+
+    def _toggle_processes(self, *_args) -> None:
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._root.append(self._process_box)
+            self.expand_btn.set_label("Processes \u25b4")
+            w, h = expanded_monitor_size()
+            self.set_default_size(w, h)
+            self.resize(w, h)
+        else:
+            self._root.remove(self._process_box)
+            self.expand_btn.set_label("Processes \u25be")
+            w, h = quarter_monitor_size()
+            self.set_default_size(w, h)
+            self.resize(w, h)
+
+    def _update_profile_highlight(self) -> None:
+        for idx, btn in self._profile_buttons.items():
+            if idx == self._active_profile:
+                _add_css_class(btn, "profile-active")
+            elif hasattr(btn, "remove_css_class"):
+                btn.remove_css_class("profile-active")
+            else:
+                btn.get_style_context().remove_class("profile-active")
+
+    def _on_profile_clicked(self, _btn: Gtk.Button, profile: int) -> None:
+        if self._profile_busy:
+            return
+        self._profile_busy = True
+        for btn in self._profile_buttons.values():
+            btn.set_sensitive(False)
+
+        def worker() -> None:
+            ok, _msg = set_fan_profile_index(profile)
+            GLib.idle_add(self._profile_done, profile, ok)
+
+        threading.Thread(target=worker, name="fan-profile", daemon=True).start()
+
+    def _profile_done(self, profile: int, ok: bool) -> None:
+        self._profile_busy = False
+        for btn in self._profile_buttons.values():
+            btn.set_sensitive(True)
+        if ok:
+            self._active_profile = profile
+            self._update_profile_highlight()
 
     def _on_close(self, *_args) -> bool:
         if self._tick_id:
@@ -860,7 +1137,8 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             overall, cores = read_proc_stat()
             self._refresh_cpu(overall, cores)
             self._refresh_temp()
-            self._refresh_procs(overall, cores)
+            if self._expanded:
+                self._refresh_procs(overall, cores)
             self._schedule_fan()
         except Exception:
             pass
@@ -1035,10 +1313,21 @@ class TaskManagerApp(Gtk.Application):
             flags = Gio.ApplicationFlags.FLAGS_NONE
         super().__init__(application_id=APP_ID, flags=flags)
         self._window: TaskManagerWindow | None = None
+        self._theme_monitor: Gio.FileMonitor | None = None
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
         apply_theme()
+        self._theme_monitor = watch_theme_dir(apply_theme)
+
+    def do_shutdown(self) -> None:
+        if self._theme_monitor is not None:
+            try:
+                self._theme_monitor.cancel()
+            except Exception:
+                pass
+            self._theme_monitor = None
+        Gtk.Application.do_shutdown(self)
 
     def do_activate(self) -> None:
         if self._window is None:
