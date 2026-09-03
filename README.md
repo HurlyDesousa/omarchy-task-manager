@@ -87,13 +87,48 @@ Settings saved to `~/.local/state/omarchy/task-manager/prefs.json`. The Autostar
 
 ```lua
 -- omarchy-task-manager begin
--- Float bottom-right; no size rule so expand can grow freely.
-o.launch_on_start("BIN")
-o.window("art.sw.omarchy.TaskManager", {
-  float = true,
-  move = { "monitor_w * 0.5", "monitor_h * 0.75" },
-})
+o.launch_on_start("~/.local/bin/omarchy-task-manager")
+o.window("art.sw.omarchy.TaskManager", { float = true })
 -- omarchy-task-manager end
 ```
 
-No `size` rule — the app manages its own dimensions. Re-running `install.sh` replaces the marked block in-place.
+Float-only window rule — no size or move pin. The app manages its own dimensions. Re-running `install.sh` replaces the marked block in-place.
+
+## Waybar icon
+
+`install.sh` also adds a `󰓅` icon to `~/.config/waybar/config.jsonc` (skipped if the file does not exist). The icon appears in `modules-center` next to `custom/weather`. Clicking it toggles the Task Manager window:
+
+- **Not running** → launches `omarchy-task-manager`
+- **Visible** on any regular workspace → moves it to `special:taskmanager` (hides it)
+- **Hidden** on `special:taskmanager` → brings it back to the current workspace and focuses it
+
+A second instance is never spawned: GTK's `application-id` (`art.sw.omarchy.TaskManager`) enforces single-instance, and the toggle script targets the window by class.
+
+Two scripts are installed to `~/.local/bin`:
+
+| Script | Purpose |
+|---|---|
+| `omarchy-task-manager-toggle` | Waybar `on-click` handler — launch / show / hide |
+| `omarchy-task-manager-waybar` | Waybar `exec` script — outputs JSON icon + running state |
+
+Waybar module definition added to `config.jsonc`:
+
+```jsonc
+"custom/omarchy-task-manager": {
+    "exec": "omarchy-task-manager-waybar",
+    "return-type": "json",
+    "interval": 5,
+    "on-click": "omarchy-task-manager-toggle",
+    "tooltip": true
+}
+```
+
+CSS added to `style.css`:
+
+```css
+#custom-omarchy-task-manager {
+  margin-right: 8px;
+}
+```
+
+After install: `hyprctl reload && killall -SIGUSR2 waybar`

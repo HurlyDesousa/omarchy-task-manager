@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Toggle Task Manager window: launch if not running; show from scratchpad or
+# hide to scratchpad (special:taskmanager) if already running.
+# Designed for Waybar on-click. App ID: art.sw.omarchy.TaskManager.
+
+CLASS="art.sw.omarchy.TaskManager"
+BIN="${HOME}/.local/bin/omarchy-task-manager"
+
+CLIENT=$(hyprctl clients -j 2>/dev/null \
+  | jq -c --arg c "$CLASS" '.[] | select(.class == $c)' 2>/dev/null \
+  | head -1)
+
+if [[ -z "$CLIENT" ]]; then
+    setsid "$BIN" </dev/null >/dev/null 2>&1 &
+    exit 0
+fi
+
+ADDRESS=$(printf '%s' "$CLIENT" | jq -r '.address')
+WS_NAME=$(printf '%s' "$CLIENT" | jq -r '.workspace.name')
+
+if [[ "$WS_NAME" == special:* ]]; then
+    CURRENT_ID=$(hyprctl activeworkspace -j 2>/dev/null | jq -r '.id')
+    hyprctl dispatch movetoworkspacesilent "${CURRENT_ID},address:${ADDRESS}" >/dev/null 2>&1
+    hyprctl dispatch focuswindow "address:${ADDRESS}" >/dev/null 2>&1
+else
+    hyprctl dispatch movetoworkspacesilent "special:taskmanager,address:${ADDRESS}" >/dev/null 2>&1
+fi
