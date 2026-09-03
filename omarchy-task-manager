@@ -31,7 +31,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.4-1"
+APP_VERSION = "0.5.4-2"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -68,7 +68,7 @@ _GPU_THERMAL_RE = re.compile(r"^gpuss_\d+_thermal$")
 # CPU temp continuously; Full Send stays mode manual + 8000 RPM (one-shot).
 # Never calls `profile`, `profile get`, or `get-profile`.
 FAN_PROFILES: list[tuple[str, str, int | None]] = [
-    ("Saver",       "manual", 1800),
+    ("Power Saver", "manual", 1800),
     ("Balanced",    "auto",   None),
     ("Performance", "manual", 4500),
     ("Full Send",   "manual", 8000),
@@ -76,7 +76,8 @@ FAN_PROFILES: list[tuple[str, str, int | None]] = [
 
 # Old label → new label for persisted-profile migration.
 _PROFILE_RENAME: dict[str, str] = {
-    "Battery saver": "Saver",
+    "Battery saver": "Power Saver",
+    "Saver":         "Power Saver",
     "Balance":       "Balanced",
     "Full speed":    "Full Send",
 }
@@ -84,7 +85,7 @@ _PROFILE_RENAME: dict[str, str] = {
 # Curve anchors: (temp_celsius, target_rpm) — interpolated linearly.
 # Applied when fan_curves pref is True and profile is in this dict.
 FAN_CURVES: dict[str, list[tuple[float, int]]] = {
-    "Saver":       [(40, 1500), (55, 1800), (70, 2500), (85, 3500)],
+    "Power Saver": [(40, 1500), (55, 1800), (70, 2500), (85, 3500)],
     "Balanced":    [(40, 1800), (55, 2800), (70, 4500), (85, 6000)],
     "Performance": [(40, 2500), (55, 4000), (70, 6000), (85, 8000)],
 }
@@ -1376,7 +1377,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         box.append(section("Fan"))
         self._p_fan_curves = Gtk.CheckButton(label="Temp-driven fan curves")
         self._p_fan_curves.set_tooltip_text(
-            "Saver / Balanced / Performance: map CPU temp → RPM continuously.\n"
+            "Power Saver / Balanced / Performance: map CPU temp → RPM continuously.\n"
             "Full Send always runs at max speed."
         )
         self._p_fan_curves.set_active(self._prefs.get("fan_curves", True))
