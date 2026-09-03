@@ -30,6 +30,8 @@ except (ImportError, ValueError) as exc:
 
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
+# Keep in sync with PKGBUILD pkgver-pkgrel (e.g. 0.5.0-2).
+APP_VERSION = "0.5.0-2"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -1457,6 +1459,10 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._p_autostart.set_active(_read_autostart_enabled())
         self._p_autostart.connect("toggled", self._on_p_autostart)
         box.append(self._p_autostart)
+
+        version_lbl = Gtk.Label(label=f"Version {APP_VERSION}", xalign=0)
+        _add_css_class(version_lbl, "dim")
+        box.append(version_lbl)
 
         pop.set_child(box)
         return pop
