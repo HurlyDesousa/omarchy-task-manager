@@ -12,6 +12,10 @@ AUTOSTART_LUA="${HYPR_DIR}/autostart.lua"
 HYPRLAND_LUA="${HYPR_DIR}/hyprland.lua"
 WAYBAR_CONFIG="${HOME}/.config/waybar/config.jsonc"
 WAYBAR_STYLE="${HOME}/.config/waybar/style.css"
+PLUGIN_ID="sw.art.task-manager"
+PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
+PLUGIN_SRC="${ROOT}/shell/${PLUGIN_ID}"
+SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python python-gobject gtk4)
 CLASS="art.sw.omarchy.TaskManager"
 
@@ -126,10 +130,65 @@ ensure_hyprland_requires_autostart() {
   printf '\nrequire("hypr.autostart")\n' >> "${HYPRLAND_LUA}"
 }
 
-# ── Waybar integration ────────────────────────────────────────────────────────
+# ── Quickshell / Omarchy shell plugin ─────────────────────────────────────────
+# Installs the bar-widget plugin under ~/.config/omarchy/plugins/sw.art.task-manager/
+# and patches ~/.config/omarchy/shell.json to place the widget in bar.layout.center
+# next to omarchy.weather (idempotent).
+
+install_quickshell_plugin() {
+  [[ -d "${PLUGIN_SRC}" ]] || { echo "Warning: plugin source not found at ${PLUGIN_SRC}"; return 0; }
+  mkdir -p "${PLUGIN_DIR}"
+  install -Dm644 "${PLUGIN_SRC}/manifest.json" "${PLUGIN_DIR}/manifest.json"
+  install -Dm644 "${PLUGIN_SRC}/BarWidget.qml"  "${PLUGIN_DIR}/BarWidget.qml"
+  echo "Quickshell plugin: installed to ${PLUGIN_DIR}"
+}
+
+patch_shell_json() {
+  [[ -f "${SHELL_JSON}" ]] || { echo "Note: ${SHELL_JSON} not found; skipping bar layout patch. Create it or run: omarchy plugin enable ${PLUGIN_ID}"; return 0; }
+
+  python3 - "${SHELL_JSON}" "${PLUGIN_ID}" <<'PY'
+import json, sys, pathlib
+
+path      = pathlib.Path(sys.argv[1])
+plugin_id = sys.argv[2]
+anchor    = "omarchy.weather"
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Warning: could not parse {path}: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+center = (
+    data.setdefault("bar", {})
+        .setdefault("layout", {})
+        .setdefault("center", [])
+)
+
+# Idempotent: exit early if already present.
+if any(e.get("id") == plugin_id for e in center):
+    sys.exit(0)
+
+entry = {"id": plugin_id}
+anchor_idx = next(
+    (i for i, e in enumerate(center) if e.get("id") == anchor), None
+)
+if anchor_idx is not None:
+    center.insert(anchor_idx + 1, entry)
+else:
+    center.append(entry)
+
+path.write_text(
+    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+print(f"shell.json: added {plugin_id} to bar.layout.center")
+PY
+}
+
+# ── Waybar integration (optional – skipped when waybar is not configured) ─────
 # Idempotently adds custom/omarchy-task-manager to ~/.config/waybar/config.jsonc
 # (near custom/weather in modules-center) and a margin rule to style.css.
-# Skips silently when neither file exists.
 
 upsert_waybar_config() {
   [[ -f "${WAYBAR_CONFIG}" ]] || return 0
@@ -170,9 +229,6 @@ else:
         sep = "," if not inner_stripped.endswith("[") else ""
         return inner_stripped + sep + '\n        "custom/omarchy-task-manager"\n    ' + m.group(2)
     text, n = center_end.subn(add_to_center, text, count=1)
-    if n == 0:
-        # No modules-center found: append module definition only.
-        pass
 
 # Append module definition before the final closing brace.
 last_brace = text.rfind("}")
@@ -187,7 +243,6 @@ PY
 
 upsert_waybar_style() {
   [[ -f "${WAYBAR_STYLE}" ]] || return 0
-  # Idempotent: only append if the rule is not already present.
   if grep -qF '#custom-omarchy-task-manager' "${WAYBAR_STYLE}"; then
     return 0
   fi
@@ -214,6 +269,8 @@ fi
 
 upsert_lua_block "${AUTOSTART_LUA}"
 ensure_hyprland_requires_autostart
+install_quickshell_plugin
+patch_shell_json
 upsert_waybar_config
 upsert_waybar_style
 
@@ -221,5 +278,7 @@ echo "Installed Task Manager."
 echo "Launch: ${BIN_DST}"
 echo "Or open \"Task Manager\" from Walker / the application menu."
 echo "Hyprland: autostart (launch-on-login) registered in ${AUTOSTART_LUA}"
-echo "Waybar: icon at ${WAYBAR_EXEC_DST} — click to toggle window"
-echo "Reload with: hyprctl reload && killall -SIGUSR2 waybar"
+echo "Quickshell plugin: ${PLUGIN_DIR}"
+echo "  Bar icon placed in center next to omarchy.weather."
+echo "  Restart shell: omarchy-restart-shell"
+echo "  (or: omarchy-shell shell rescanPlugins && omarchy plugin enable ${PLUGIN_ID})"

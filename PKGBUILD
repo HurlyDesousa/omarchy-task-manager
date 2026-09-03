@@ -1,8 +1,8 @@
 # Maintainer: Toby Swart <toby@s-w.art>
 pkgname=omarchy-task-manager
-pkgver=0.5.2
+pkgver=0.5.3
 pkgrel=1
-pkgdesc='Omarchy-themed GTK4 task manager'
+pkgdesc='Omarchy-themed GTK4 task manager with Quickshell bar widget'
 arch=('any')
 url='https://github.com/HurlyDesousa/omarchy-task-manager'
 license=('MIT')
@@ -12,8 +12,10 @@ source=("omarchy-task-manager"
         "omarchy-task-manager-toggle"
         "omarchy-task-manager-waybar"
         "omarchy-task-manager.desktop"
+        "shell/sw.art.task-manager/manifest.json"
+        "shell/sw.art.task-manager/BarWidget.qml"
         "LICENSE")
-md5sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+md5sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
   install -Dm755 "$srcdir/omarchy-task-manager"        "$pkgdir/usr/bin/omarchy-task-manager"
@@ -23,5 +25,9 @@ package() {
     "$pkgdir/usr/share/applications/omarchy-task-manager.desktop"
   sed -i 's|^Exec=.*|Exec=/usr/bin/omarchy-task-manager|' \
     "$pkgdir/usr/share/applications/omarchy-task-manager.desktop"
+  install -Dm644 "$srcdir/manifest.json" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.task-manager/manifest.json"
+  install -Dm644 "$srcdir/BarWidget.qml" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.task-manager/BarWidget.qml"
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

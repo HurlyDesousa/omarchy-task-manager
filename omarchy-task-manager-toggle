@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Toggle Task Manager window: launch if not running; show from scratchpad or
-# hide to scratchpad (special:taskmanager) if already running.
-# Designed for Waybar on-click. App ID: art.sw.omarchy.TaskManager.
+# Toggle Task Manager window: launch if not running; hide to or show from
+# special:taskmanager using the Hyprland Lua eval API.
+# Replaces classic movetoworkspacesilent dispatch (fails rc7 on Lua Hyprland).
+# App ID: art.sw.omarchy.TaskManager.
 
 CLASS="art.sw.omarchy.TaskManager"
 BIN="${HOME}/.local/bin/omarchy-task-manager"
@@ -19,9 +20,9 @@ ADDRESS=$(printf '%s' "$CLIENT" | jq -r '.address')
 WS_NAME=$(printf '%s' "$CLIENT" | jq -r '.workspace.name')
 
 if [[ "$WS_NAME" == special:* ]]; then
-    CURRENT_ID=$(hyprctl activeworkspace -j 2>/dev/null | jq -r '.id')
-    hyprctl dispatch movetoworkspacesilent "${CURRENT_ID},address:${ADDRESS}" >/dev/null 2>&1
-    hyprctl dispatch focuswindow "address:${ADDRESS}" >/dev/null 2>&1
+    # Window is already in the special workspace; toggle it back into view.
+    hyprctl eval 'hl.dsp.workspace.toggle_special("taskmanager")' >/dev/null 2>&1
 else
-    hyprctl dispatch movetoworkspacesilent "special:taskmanager,address:${ADDRESS}" >/dev/null 2>&1
+    # Move window to special:taskmanager (hide), without warping the display.
+    hyprctl eval "hl.dsp.window.move({ workspace = \"special:taskmanager\", follow = false, window = \"address:${ADDRESS}\" })" >/dev/null 2>&1
 fi
