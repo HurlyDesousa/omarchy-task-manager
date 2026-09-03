@@ -2,7 +2,7 @@
 // Drives /usr/local/bin/x1e-ec-tool kb '#rrggbb' (solid color, ASUS Vivobook x1e).
 //
 // State file (Omarchy idle-helper contract):
-//   ~/.local/state/omarchy/task-manager/kbd-backlight
+//   ~/.local/state/omarchy/kbd-backlight
 //   JSON: {"hex":"#rrggbb","enabled":true}
 //   Written atomically (mktemp + rename) on every change AND on startup apply.
 //   Idle helper: dim → kb #000000; activity → if enabled, kb hex from file.
@@ -109,7 +109,7 @@ BarWidget {
 
     Component.onCompleted: {
         initProc.command = ["/bin/bash", "-c",
-            "cat \"$HOME/.local/state/omarchy/task-manager/kbd-backlight\" 2>/dev/null" +
+            "cat \"$HOME/.local/state/omarchy/kbd-backlight\" 2>/dev/null" +
             " || echo '{}'"]
         initProc.running = true
     }
@@ -134,7 +134,7 @@ BarWidget {
         var en = kbdEnabled && brightness > 0
         var payload = '{"hex":"' + actualHex + '","enabled":' + (en ? "true" : "false") + '}'
         saveProc.command = ["/bin/bash", "-c",
-            "d=\"$HOME/.local/state/omarchy/task-manager\";" +
+            "d=\"$HOME/.local/state/omarchy\";" +
             " mkdir -p \"$d\" &&" +
             " t=$(mktemp \"$d/kbd-backlight.XXXXXX\") &&" +
             " printf '%s\\n' '" + payload + "' > \"$t\" &&" +
