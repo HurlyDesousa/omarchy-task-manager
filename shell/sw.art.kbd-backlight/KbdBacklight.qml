@@ -6,6 +6,10 @@
 //   JSON: {"hex":"#rrggbb","enabled":true}
 //   Written atomically (mktemp + rename) on every change AND on startup apply.
 //   Idle helper: dim → kb #000000; activity → if enabled, kb hex from file.
+//
+// Panel pattern: Panel (qs.Ui) + KeyboardPanel (qs.Ui) anchored to the bar button.
+// This is the same architecture as omarchy.agents / omarchy.weather and avoids
+// the QtQuick.Controls Popup which is clipped by the layer-shell PanelWindow.
 
 import QtQuick
 import QtQuick.Controls
@@ -13,9 +17,10 @@ import QtQuick.Layouts
 import Quickshell.Io
 import qs.Ui
 
-BarWidget {
+Panel {
     id: root
     moduleName: "sw.art.kbd-backlight"
+    manageIpc: false
 
     // ── Live state ──────────────────────────────────────────────────────────
     // baseHex: full-brightness chosen color (#rrggbb).
@@ -161,6 +166,7 @@ BarWidget {
     }
 
     // ── Bar button ──────────────────────────────────────────────────────────
+    // implicitWidth/Height tell the bar how big our slot is.
     implicitWidth:  button.implicitWidth
     implicitHeight: button.implicitHeight
 
@@ -172,233 +178,237 @@ BarWidget {
         tooltipText: (root.kbdEnabled && root.brightness > 0)
             ? ("Keyboard: " + root.actualHex + " @ " + root.brightness + "%")
             : "Keyboard: off"
+        // Use root.toggle() so the KeyboardPanel (layer-shell) opens/closes via
+        // Panel.panelController — not a QtQuick.Controls Popup.
         onPressed: function(b) {
-            if (b !== Qt.RightButton) {
-                if (popover.visible) popover.close()
-                else                 popover.open()
-            }
+            if (b !== Qt.RightButton) root.toggle()
         }
     }
 
-    // ── Popover ─────────────────────────────────────────────────────────────
-    Popup {
-        id: popover
-        parent: root
-        // Centre over the bar button; Qt clamps to screen edges.
-        x: Math.round((root.width - width) / 2)
-        y: root.height + 2
-        width: 272
-        padding: 0
-        modal: false
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // ── Panel ───────────────────────────────────────────────────────────────
+    // KeyboardPanel is a layer-shell surface anchored to the bar button.
+    // It is positioned and shown/hidden by the Omarchy shell, matching the
+    // pattern used by omarchy.agents, omarchy.weather, and omarchy.clock.
+    KeyboardPanel {
+        id: kbdPanel
+        anchorItem: button
+        owner: root
+        bar: root.bar
+        open: root.opened
+        contentWidth: 272
+        contentHeight: panelContent.implicitHeight
 
-        background: Rectangle {
+        // Background surface for the panel.
+        Rectangle {
+            anchors.fill: parent
             color: "#1e1e2e"
             border.color: "#45475a"
             border.width: 1
             radius: 8
-        }
-
-        contentItem: ColumnLayout {
-            spacing: 0
-            width: popover.width
-
-            // ── Header ────────────────────────────────────────────────────
-            Label {
-                text: "Keyboard Backlight"
-                font.pixelSize: 13
-                font.bold: true
-                color: "#cdd6f4"
-                Layout.fillWidth: true
-                Layout.topMargin: 12
-                Layout.leftMargin: 14
-                Layout.rightMargin: 14
-                Layout.bottomMargin: 8
-            }
-
-            Rectangle { height: 1; color: "#45475a"; Layout.fillWidth: true }
+            clip: true
 
             ColumnLayout {
-                spacing: 10
-                Layout.topMargin: 12
-                Layout.leftMargin: 14
-                Layout.rightMargin: 14
-                Layout.bottomMargin: 14
+                id: panelContent
+                spacing: 0
+                width: parent.width
 
-                // ── Colour presets ────────────────────────────────────────
-                RowLayout {
-                    spacing: 6
+                // ── Header ────────────────────────────────────────────────────
+                Label {
+                    text: "Keyboard Backlight"
+                    font.pixelSize: 13
+                    font.bold: true
+                    color: "#cdd6f4"
                     Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    Layout.leftMargin: 14
+                    Layout.rightMargin: 14
+                    Layout.bottomMargin: 8
+                }
 
-                    Repeater {
-                        model: ["#ffffff", "#ffd080", "#ff3333", "#ff8800",
-                                "#33ee44", "#00eeee", "#3388ff", "#cc44ff"]
-                        delegate: Rectangle {
-                            property string swatch: modelData
-                            width: 26; height: 26; radius: 5
-                            color: swatch
-                            border.width: 2
-                            border.color: (root.baseHex.toLowerCase() === swatch)
-                                ? "#cdd6f4" : "transparent"
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    root.baseHex = swatch
-                                    hexInput.text = swatch
-                                    if (!root.kbdEnabled) root.kbdEnabled = true
-                                    if (root.brightness === 0) root.brightness = 100
-                                    root.applyAndSave()
+                Rectangle { height: 1; color: "#45475a"; Layout.fillWidth: true }
+
+                ColumnLayout {
+                    spacing: 10
+                    Layout.topMargin: 12
+                    Layout.leftMargin: 14
+                    Layout.rightMargin: 14
+                    Layout.bottomMargin: 14
+
+                    // ── Colour presets ────────────────────────────────────
+                    RowLayout {
+                        spacing: 6
+                        Layout.fillWidth: true
+
+                        Repeater {
+                            model: ["#ffffff", "#ffd080", "#ff3333", "#ff8800",
+                                    "#33ee44", "#00eeee", "#3388ff", "#cc44ff"]
+                            delegate: Rectangle {
+                                property string swatch: modelData
+                                width: 26; height: 26; radius: 5
+                                color: swatch
+                                border.width: 2
+                                border.color: (root.baseHex.toLowerCase() === swatch)
+                                    ? "#cdd6f4" : "transparent"
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        root.baseHex = swatch
+                                        hexInput.text = swatch
+                                        if (!root.kbdEnabled) root.kbdEnabled = true
+                                        if (root.brightness === 0) root.brightness = 100
+                                        root.applyAndSave()
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // ── Hex entry ─────────────────────────────────────────────
-                RowLayout {
-                    spacing: 8
-                    Layout.fillWidth: true
-
-                    Label {
-                        text: "Hex"
-                        color: "#a6adc8"
-                        font.pixelSize: 12
-                    }
-
-                    TextField {
-                        id: hexInput
-                        text: root.baseHex
-                        font.family: "monospace"
-                        font.pixelSize: 12
-                        color: "#cdd6f4"
+                    // ── Hex entry ─────────────────────────────────────────
+                    RowLayout {
+                        spacing: 8
                         Layout.fillWidth: true
-                        leftPadding: 6; rightPadding: 6
-                        topPadding: 4; bottomPadding: 4
-                        background: Rectangle {
-                            color: "#313244"
-                            radius: 4
-                            border.color: hexInput.activeFocus ? "#89b4fa" : "#45475a"
-                            border.width: 1
+
+                        Label {
+                            text: "Hex"
+                            color: "#a6adc8"
+                            font.pixelSize: 12
                         }
-                        onEditingFinished: {
-                            var v = root.normaliseHex(text)
-                            if (!v) { text = root.baseHex; return }
-                            root.baseHex = v
-                            text = v
-                            if (!root.kbdEnabled) root.kbdEnabled = true
-                            if (root.brightness === 0) root.brightness = 100
-                            root.applyAndSave()
-                        }
-                        Connections {
-                            target: root
-                            function onBaseHexChanged() {
-                                if (!hexInput.activeFocus) hexInput.text = root.baseHex
+
+                        TextField {
+                            id: hexInput
+                            text: root.baseHex
+                            font.family: "monospace"
+                            font.pixelSize: 12
+                            color: "#cdd6f4"
+                            Layout.fillWidth: true
+                            leftPadding: 6; rightPadding: 6
+                            topPadding: 4; bottomPadding: 4
+                            background: Rectangle {
+                                color: "#313244"
+                                radius: 4
+                                border.color: hexInput.activeFocus ? "#89b4fa" : "#45475a"
+                                border.width: 1
+                            }
+                            onEditingFinished: {
+                                var v = root.normaliseHex(text)
+                                if (!v) { text = root.baseHex; return }
+                                root.baseHex = v
+                                text = v
+                                if (!root.kbdEnabled) root.kbdEnabled = true
+                                if (root.brightness === 0) root.brightness = 100
+                                root.applyAndSave()
+                            }
+                            Connections {
+                                target: root
+                                function onBaseHexChanged() {
+                                    if (!hexInput.activeFocus) hexInput.text = root.baseHex
+                                }
                             }
                         }
+
+                        // Live preview swatch.
+                        Rectangle {
+                            width: 22; height: 22; radius: 4
+                            color: root.actualHex
+                            border.color: "#45475a"; border.width: 1
+                        }
                     }
 
-                    // Live preview swatch.
-                    Rectangle {
-                        width: 22; height: 22; radius: 4
-                        color: root.actualHex
-                        border.color: "#45475a"; border.width: 1
-                    }
-                }
-
-                // ── Brightness slider ─────────────────────────────────────
-                RowLayout {
-                    spacing: 8
-                    Layout.fillWidth: true
-
-                    Label {
-                        text: "Bright"
-                        color: "#a6adc8"
-                        font.pixelSize: 12
-                    }
-
-                    Slider {
-                        id: brightSlider
-                        from: 0; to: 100; stepSize: 1
-                        value: root.brightness
+                    // ── Brightness slider ─────────────────────────────────
+                    RowLayout {
+                        spacing: 8
                         Layout.fillWidth: true
 
-                        handle: Rectangle {
-                            x: brightSlider.leftPadding +
-                               brightSlider.visualPosition * (brightSlider.availableWidth - width)
-                            y: brightSlider.topPadding +
-                               brightSlider.availableHeight / 2 - height / 2
-                            implicitWidth: 14; implicitHeight: 14
-                            radius: 7
-                            color: "#89b4fa"
-                            border.color: "#1e1e2e"; border.width: 1
+                        Label {
+                            text: "Bright"
+                            color: "#a6adc8"
+                            font.pixelSize: 12
                         }
 
-                        background: Rectangle {
-                            x: brightSlider.leftPadding
-                            y: brightSlider.topPadding + brightSlider.availableHeight / 2 - height / 2
-                            width: brightSlider.availableWidth; height: 4; radius: 2
-                            color: "#313244"
-                            Rectangle {
-                                width: brightSlider.visualPosition * parent.width
-                                height: parent.height; radius: parent.radius
+                        Slider {
+                            id: brightSlider
+                            from: 0; to: 100; stepSize: 1
+                            value: root.brightness
+                            Layout.fillWidth: true
+
+                            handle: Rectangle {
+                                x: brightSlider.leftPadding +
+                                   brightSlider.visualPosition * (brightSlider.availableWidth - width)
+                                y: brightSlider.topPadding +
+                                   brightSlider.availableHeight / 2 - height / 2
+                                implicitWidth: 14; implicitHeight: 14
+                                radius: 7
                                 color: "#89b4fa"
+                                border.color: "#1e1e2e"; border.width: 1
                             }
-                        }
 
-                        onMoved: {
-                            root.brightness = Math.round(value)
-                            root.applyAndSave()
-                        }
-                    }
-
-                    Label {
-                        text: root.brightness + "%"
-                        color: "#cdd6f4"
-                        font.pixelSize: 12
-                        Layout.minimumWidth: 36
-                    }
-                }
-
-                // ── On / off toggle ───────────────────────────────────────
-                RowLayout {
-                    spacing: 8
-                    Layout.fillWidth: true
-
-                    Label {
-                        text: (root.kbdEnabled && root.brightness > 0) ? "On" : "Off"
-                        color: "#a6adc8"
-                        font.pixelSize: 12
-                        Layout.fillWidth: true
-                    }
-
-                    Rectangle {
-                        width: 46; height: 24; radius: 12
-                        color: (root.kbdEnabled && root.brightness > 0) ? "#89b4fa" : "#45475a"
-
-                        Behavior on color { ColorAnimation { duration: 120 } }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                var isOn = root.kbdEnabled && root.brightness > 0
-                                if (isOn) {
-                                    root.kbdEnabled = false
-                                } else {
-                                    root.kbdEnabled = true
-                                    if (root.brightness === 0) root.brightness = 100
+                            background: Rectangle {
+                                x: brightSlider.leftPadding
+                                y: brightSlider.topPadding + brightSlider.availableHeight / 2 - height / 2
+                                width: brightSlider.availableWidth; height: 4; radius: 2
+                                color: "#313244"
+                                Rectangle {
+                                    width: brightSlider.visualPosition * parent.width
+                                    height: parent.height; radius: parent.radius
+                                    color: "#89b4fa"
                                 }
+                            }
+
+                            onMoved: {
+                                root.brightness = Math.round(value)
                                 root.applyAndSave()
                             }
                         }
 
+                        Label {
+                            text: root.brightness + "%"
+                            color: "#cdd6f4"
+                            font.pixelSize: 12
+                            Layout.minimumWidth: 36
+                        }
+                    }
+
+                    // ── On / off toggle ───────────────────────────────────
+                    RowLayout {
+                        spacing: 8
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: (root.kbdEnabled && root.brightness > 0) ? "On" : "Off"
+                            color: "#a6adc8"
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                        }
+
                         Rectangle {
-                            width: 18; height: 18; radius: 9
-                            color: "#1e1e2e"
-                            anchors.verticalCenter: parent.verticalCenter
-                            x: (root.kbdEnabled && root.brightness > 0) ? 25 : 3
-                            Behavior on x { NumberAnimation { duration: 120 } }
+                            width: 46; height: 24; radius: 12
+                            color: (root.kbdEnabled && root.brightness > 0) ? "#89b4fa" : "#45475a"
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    var isOn = root.kbdEnabled && root.brightness > 0
+                                    if (isOn) {
+                                        root.kbdEnabled = false
+                                    } else {
+                                        root.kbdEnabled = true
+                                        if (root.brightness === 0) root.brightness = 100
+                                    }
+                                    root.applyAndSave()
+                                }
+                            }
+
+                            Rectangle {
+                                width: 18; height: 18; radius: 9
+                                color: "#1e1e2e"
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: (root.kbdEnabled && root.brightness > 0) ? 25 : 3
+                                Behavior on x { NumberAnimation { duration: 120 } }
+                            }
                         }
                     }
                 }
