@@ -1,7 +1,7 @@
 # Maintainer: Toby Swart <toby@s-w.art>
 pkgname=omarchy-task-manager
 pkgver=0.5.4
-pkgrel=1
+pkgrel=2
 pkgdesc='Omarchy-themed GTK4 task manager with Quickshell bar widget'
 arch=('any')
 url='https://github.com/HurlyDesousa/omarchy-task-manager'
@@ -15,6 +15,9 @@ source=("omarchy-task-manager"
         "shell/sw.art.task-manager/manifest.json"
         "shell/sw.art.task-manager/BarWidget.qml"
         "LICENSE")
+# kbd-backlight QML files share the basename "manifest.json" with the task-manager
+# plugin, so they are NOT listed in source[] (which copies by basename into $srcdir).
+# They are installed directly from $startdir (the repo root) in package() instead.
 md5sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
@@ -29,5 +32,10 @@ package() {
     "$pkgdir/usr/share/omarchy/plugins/sw.art.task-manager/manifest.json"
   install -Dm644 "$srcdir/BarWidget.qml" \
     "$pkgdir/usr/share/omarchy/plugins/sw.art.task-manager/BarWidget.qml"
+  # kbd-backlight plugin — installed from $startdir to avoid basename collision in $srcdir.
+  install -Dm644 "$startdir/shell/sw.art.kbd-backlight/manifest.json" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.kbd-backlight/manifest.json"
+  install -Dm644 "$startdir/shell/sw.art.kbd-backlight/KbdBacklight.qml" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.kbd-backlight/KbdBacklight.qml"
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

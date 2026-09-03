@@ -15,6 +15,9 @@ WAYBAR_STYLE="${HOME}/.config/waybar/style.css"
 PLUGIN_ID="sw.art.task-manager"
 PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
 PLUGIN_SRC="${ROOT}/shell/${PLUGIN_ID}"
+KBD_PLUGIN_ID="sw.art.kbd-backlight"
+KBD_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${KBD_PLUGIN_ID}"
+KBD_PLUGIN_SRC="${ROOT}/shell/${KBD_PLUGIN_ID}"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python python-gobject gtk4)
 CLASS="art.sw.omarchy.TaskManager"
@@ -186,6 +189,71 @@ print(f"shell.json: added {plugin_id} to bar.layout.center")
 PY
 }
 
+# ── Quickshell kbd-backlight plugin ───────────────────────────────────────────
+# Installs sw.art.kbd-backlight under ~/.config/omarchy/plugins/ and patches
+# shell.json to place it immediately to the left of the clock/time widget
+# (idempotent; does not affect sw.art.task-manager or omarchy.weather entries).
+
+install_kbd_backlight_plugin() {
+  [[ -d "${KBD_PLUGIN_SRC}" ]] || { echo "Warning: kbd-backlight plugin source not found at ${KBD_PLUGIN_SRC}"; return 0; }
+  mkdir -p "${KBD_PLUGIN_DIR}"
+  install -Dm644 "${KBD_PLUGIN_SRC}/manifest.json"   "${KBD_PLUGIN_DIR}/manifest.json"
+  install -Dm644 "${KBD_PLUGIN_SRC}/KbdBacklight.qml" "${KBD_PLUGIN_DIR}/KbdBacklight.qml"
+  echo "kbd-backlight plugin: installed to ${KBD_PLUGIN_DIR}"
+}
+
+patch_shell_json_kbd() {
+  [[ -f "${SHELL_JSON}" ]] || {
+    echo "Note: ${SHELL_JSON} not found; skipping bar layout patch."
+    echo "      Run: omarchy plugin enable ${KBD_PLUGIN_ID}"
+    return 0
+  }
+
+  python3 - "${SHELL_JSON}" "${KBD_PLUGIN_ID}" <<'PY'
+import json, sys, pathlib
+
+path      = pathlib.Path(sys.argv[1])
+plugin_id = sys.argv[2]
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Warning: could not parse {path}: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+center = (
+    data.setdefault("bar", {})
+        .setdefault("layout", {})
+        .setdefault("center", [])
+)
+
+# Idempotent: exit early if already present.
+if any(e.get("id") == plugin_id for e in center):
+    sys.exit(0)
+
+entry = {"id": plugin_id}
+
+# Find the clock/time widget: match any id containing "clock" or "time".
+clock_idx = next(
+    (i for i, e in enumerate(center)
+     if any(kw in e.get("id", "").lower() for kw in ("clock", "time"))),
+    None,
+)
+
+if clock_idx is not None:
+    center.insert(clock_idx, entry)
+    print(f"shell.json: inserted {plugin_id} left of '{center[clock_idx + 1]['id']}'")
+else:
+    center.append(entry)
+    print(f"shell.json: appended {plugin_id} (no clock widget found to anchor against)")
+
+path.write_text(
+    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
 # ── Waybar integration (optional – skipped when waybar is not configured) ─────
 # Idempotently adds custom/omarchy-task-manager to ~/.config/waybar/config.jsonc
 # (near custom/weather in modules-center) and a margin rule to style.css.
@@ -271,6 +339,8 @@ upsert_lua_block "${AUTOSTART_LUA}"
 ensure_hyprland_requires_autostart
 install_quickshell_plugin
 patch_shell_json
+install_kbd_backlight_plugin
+patch_shell_json_kbd
 upsert_waybar_config
 upsert_waybar_style
 
@@ -282,3 +352,7 @@ echo "Quickshell plugin: ${PLUGIN_DIR}"
 echo "  Bar icon placed in center next to omarchy.weather."
 echo "  Restart shell: omarchy-restart-shell"
 echo "  (or: omarchy-shell shell rescanPlugins && omarchy plugin enable ${PLUGIN_ID})"
+echo "Keyboard backlight plugin: ${KBD_PLUGIN_DIR}"
+echo "  Bar icon placed immediately left of the clock."
+echo "  State file: ~/.local/state/omarchy/kbd-backlight"
+echo "  (or: omarchy plugin enable ${KBD_PLUGIN_ID})"
