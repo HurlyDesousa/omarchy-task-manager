@@ -12,7 +12,15 @@ cd omarchy-task-manager
 ./install.sh
 ```
 
-Installs `python`, `python-gobject`, and `gtk4` if needed, copies the app to `~/.local/bin/omarchy-task-manager`, installs a desktop entry, and writes a marked block into `~/.config/hypr/autostart.lua` so the app starts with the Hyprland session and floats in the bottom-right corner. Safe to re-run.
+Installs `python`, `python-gobject`, and `gtk4` if needed, copies the app to `~/.local/bin/omarchy-task-manager`, installs a desktop entry, writes a marked block into `~/.config/hypr/autostart.lua`, installs the Quickshell bar-widget plugin, and patches `~/.config/omarchy/shell.json` to add the icon next to `omarchy.weather`. Safe to re-run.
+
+After install, restart the Omarchy shell:
+
+```bash
+omarchy-restart-shell
+```
+
+Or manually: `omarchy-shell shell rescanPlugins && omarchy plugin enable sw.art.task-manager`
 
 Open Walker and search for **Task Manager**, or `hyprctl reload` and log in again for autostart.
 
@@ -23,6 +31,30 @@ makepkg -si
 ```
 
 Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip.
+
+## Quickshell bar widget
+
+The `sw.art.task-manager` plugin ships in `shell/sw.art.task-manager/` and is installed to `~/.config/omarchy/plugins/sw.art.task-manager/`. `install.sh` places `{ "id": "sw.art.task-manager" }` into `~/.config/omarchy/shell.json` `bar.layout.center` directly after `omarchy.weather` (idempotent; never clobbers other entries).
+
+The `󰓅` icon appears in the Quickshell bar next to the weather widget. Click it to show or hide the Task Manager.
+
+**Click behavior** (via `omarchy-task-manager-toggle`):
+
+| App state | Action |
+|---|---|
+| Not running | Launch `omarchy-task-manager` (single instance via GTK app id) |
+| On regular workspace | Move to `special:taskmanager` — hidden |
+| On `special:taskmanager` | `toggle_special` — bring back into view |
+
+The toggle uses the Hyprland Lua eval API (compatible with Lua-based Hyprland sessions):
+
+```bash
+# Hide: move to special workspace
+hyprctl eval 'hl.dsp.window.move({ workspace = "special:taskmanager", follow = false, window = "address:…" })'
+
+# Show: toggle special workspace visibility
+hyprctl eval 'hl.dsp.workspace.toggle_special("taskmanager")'
+```
 
 ## What it shows
 
@@ -94,22 +126,18 @@ o.window("art.sw.omarchy.TaskManager", { float = true })
 
 Float-only window rule — no size or move pin. The app manages its own dimensions. Re-running `install.sh` replaces the marked block in-place.
 
-## Waybar icon
+## Waybar (optional)
 
-`install.sh` also adds a `󰓅` icon to `~/.config/waybar/config.jsonc` (skipped if the file does not exist). The icon appears in `modules-center` next to `custom/weather`. Clicking it toggles the Task Manager window:
+Waybar is **not required**. The primary toggle path is the Quickshell bar widget above.
 
-- **Not running** → launches `omarchy-task-manager`
-- **Visible** on any regular workspace → moves it to `special:taskmanager` (hides it)
-- **Hidden** on `special:taskmanager` → brings it back to the current workspace and focuses it
-
-A second instance is never spawned: GTK's `application-id` (`art.sw.omarchy.TaskManager`) enforces single-instance, and the toggle script targets the window by class.
+If Waybar is present (`~/.config/waybar/config.jsonc` exists), `install.sh` also adds a `󰓅` icon to `modules-center` next to `custom/weather`. Clicking it calls the same `omarchy-task-manager-toggle` script.
 
 Two scripts are installed to `~/.local/bin`:
 
 | Script | Purpose |
 |---|---|
-| `omarchy-task-manager-toggle` | Waybar `on-click` handler — launch / show / hide |
-| `omarchy-task-manager-waybar` | Waybar `exec` script — outputs JSON icon + running state |
+| `omarchy-task-manager-toggle` | Click handler — launch / show / hide via Lua hyprctl eval |
+| `omarchy-task-manager-waybar` | Waybar `exec` — outputs JSON icon + running state |
 
 Waybar module definition added to `config.jsonc`:
 
@@ -130,5 +158,3 @@ CSS added to `style.css`:
   margin-right: 8px;
 }
 ```
-
-After install: `hyprctl reload && killall -SIGUSR2 waybar`

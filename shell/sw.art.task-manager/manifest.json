@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sw.art.task-manager",
+  "name": "Task Manager",
+  "version": "0.5.3",
+  "author": "Toby Swart",
+  "license": "MIT",
+  "description": "Omarchy bar icon for the GTK4 Task Manager — click to show or hide the window",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Task Manager",
+    "description": "Show/hide the GTK4 Task Manager with a single click",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}
