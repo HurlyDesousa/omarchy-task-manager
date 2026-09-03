@@ -72,12 +72,12 @@ Four buttons sit below the fan readout. They call `x1e-ec-tool` directly using `
 
 | Label | Curves OFF (one-shot) | Curves ON |
 |---|---|---|
-| **Saver** | `mode manual` → `set-speed 1800` | `mode manual` + continuous curve: 40 °C→1500, 55 °C→1800, 70 °C→2500, 85 °C→3500 RPM |
+| **Power Saver** | `mode manual` → `set-speed 1800` | `mode manual` + continuous curve: 40 °C→1500, 55 °C→1800, 70 °C→2500, 85 °C→3500 RPM |
 | **Balanced** | `mode auto` (EC temp-loop owns RPM) | `mode manual` + continuous curve: 40 °C→1800, 55 °C→2800, 70 °C→4500, 85 °C→6000 RPM |
 | **Performance** | `mode manual` → `set-speed 4500` | `mode manual` + continuous curve: 40 °C→2500, 55 °C→4000, 70 °C→6000, 85 °C→8000 RPM |
 | **Full Send** | `mode manual` → `set-speed 8000` | Same — always full speed, no curve |
 
-When **Temp-driven fan curves** is on (default), Saver / Balanced / Performance map CPU temperature to RPM linearly between the anchors above, updating every 2 s and sending `set-speed` only when the target shifts by > 200 RPM or 5 s have elapsed (to avoid EC spam). Full Send always applies once at 8000 RPM regardless of the curves setting.
+When **Temp-driven fan curves** is on (default), Power Saver / Balanced / Performance map CPU temperature to RPM linearly between the anchors above, updating every 2 s and sending `set-speed` only when the target shifts by > 200 RPM or 5 s have elapsed (to avoid EC spam). Full Send always applies once at 8000 RPM regardless of the curves setting.
 
 After applying in one-shot mode, `get-speed` is called; actual RPM appears in a 5 s auto-clearing status line. Errors surface in red. `hurly` needs to be in the `i2c` group (or `sudo -n` must work). Last-used profile saved to `~/.local/state/omarchy/task-manager/fan-profile`.
 
@@ -107,7 +107,7 @@ The gear button opens a settings popover:
 | Remember last state | Restore compact/expanded across sessions |
 | Refresh interval | 500 ms / 1 s / 2 s / 5 s — updates the live timer |
 | Show GPU row | Hides/shows the GPU % + temp row |
-| Temp-driven fan curves | Saver / Balanced / Performance continuously track CPU temp → RPM; Full Send unaffected |
+| Temp-driven fan curves | Power Saver / Balanced / Performance continuously track CPU temp → RPM; Full Send unaffected |
 | Pin to bottom-right | Move to bottom-right on expand |
 | Start with Hyprland session | Adds/removes `o.launch_on_start` in `~/.config/hypr/autostart.lua`; the float+move window rule is preserved when disabled |
 
