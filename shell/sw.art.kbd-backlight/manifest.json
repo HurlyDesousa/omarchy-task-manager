@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sw.art.kbd-backlight",
+  "name": "Keyboard Backlight",
+  "version": "1.0.0",
+  "author": "Toby Swart",
+  "license": "MIT",
+  "description": "Keyboard RGB backlight control for ASUS Vivobook (x1e-ec-tool solid color)",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "KbdBacklight.qml"
+  },
+  "barWidget": {
+    "displayName": "Keyboard Backlight",
+    "description": "Click to control keyboard RGB color and brightness",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}
