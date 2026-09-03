@@ -1,6 +1,6 @@
 # Maintainer: Toby Swart <toby@s-w.art>
 pkgname=omarchy-task-manager
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Omarchy-themed GTK4 task manager'
 arch=('any')

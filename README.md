@@ -1,6 +1,6 @@
 # omarchy-task-manager
 
-Native GTK4 task manager v3 for Omarchy: CPU/GPU stats, thermals, fan profiles, compact mode, settings, and a searchable process table.
+Native GTK4 task manager v4 for Omarchy: CPU/GPU stats, thermals, temp-driven fan curves, compact mode, settings, and a searchable process table.
 
 Application id: `art.sw.omarchy.TaskManager`
 
@@ -26,27 +26,28 @@ Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip.
 
 ## What it shows
 
-- **CPU** % from `/proc/stat` (core count not hardcoded), per-core bars
-- **CPU temp**: max of `cpu0-0-top-thermal` / `cpu1-0-top-thermal` / `cpu2-0-top-thermal`, else hottest `cpu*` thermal zone
+- **CPU** % from `/proc/stat` (core count not hardcoded), per-core bars; **CPU temp** shown on the right of the CPU row (mirrors GPU layout)
 - **GPU** % from `/sys/class/devfreq/3d00000.gpu` `cur_freq / max_freq` (Snapdragon X Elite, `simple_ondemand` governor). Em-dash if absent.
-- **GPU temp**: max of `gpuss_0_thermal … gpuss_7_thermal` hwmon sensors (`temp1_input / 1000 °C`), shown in the GPU row. Em-dash if absent.
+- **GPU temp**: max of `gpuss_0_thermal … gpuss_7_thermal` hwmon sensors (`temp1_input / 1000 °C`), shown on the right of the GPU row. Em-dash if absent.
 - **Fan L / Fan R** RPM via `x1e-ec-tool get-speed` (or `sudo -n`, or hwmon `fan*_input`)
-- **Fan profiles** — four one-click buttons (see below)
+- **Fan profiles** — four one-click buttons with optional temp-driven curves (see below)
 - **Process table**: name, PID, CPU %, RSS — sortable, searchable; End process is SIGTERM then SIGKILL
 - **Colors** from `~/.local/state/omarchy/current/theme/colors.toml` (live-reload via Gio directory monitor), JetBrainsMono Nerd Font, GTK/dark fallback
 
 ## Fan profiles
 
-Four buttons sit below the thermal/fan readout. They call `x1e-ec-tool` directly using `mode` + `set-speed` — never `profile`/`profile get`/`get-profile`. Does not stop `x1e-ec-tool.service`.
+Four buttons sit below the fan readout. They call `x1e-ec-tool` directly using `mode` + `set-speed` — never `profile`/`profile get`/`get-profile`. Does not stop `x1e-ec-tool.service`.
 
-| Label | Commands |
-|---|---|
-| Battery saver | `mode manual` → `set-speed 1800` |
-| Balance | `mode auto` (ec-service temp-loop owns RPM) |
-| Performance | `mode manual` → `set-speed 4500` |
-| Full speed | `mode manual` → `set-speed 8000` |
+| Label | Curves OFF (one-shot) | Curves ON |
+|---|---|---|
+| **Saver** | `mode manual` → `set-speed 1800` | `mode manual` + continuous curve: 40 °C→1500, 55 °C→1800, 70 °C→2500, 85 °C→3500 RPM |
+| **Balanced** | `mode auto` (EC temp-loop owns RPM) | `mode manual` + continuous curve: 40 °C→1800, 55 °C→2800, 70 °C→4500, 85 °C→6000 RPM |
+| **Performance** | `mode manual` → `set-speed 4500` | `mode manual` + continuous curve: 40 °C→2500, 55 °C→4000, 70 °C→6000, 85 °C→8000 RPM |
+| **Full Send** | `mode manual` → `set-speed 8000` | Same — always full speed, no curve |
 
-After applying, `get-speed` is called; actual RPM appears in a 5 s auto-clearing status line. Errors surface in red. `hurly` needs to be in the `i2c` group (or `sudo -n` must work). Last-used profile saved to `~/.local/state/omarchy/task-manager/fan-profile`.
+When **Temp-driven fan curves** is on (default), Saver / Balanced / Performance map CPU temperature to RPM linearly between the anchors above, updating every 2 s and sending `set-speed` only when the target shifts by > 200 RPM or 5 s have elapsed (to avoid EC spam). Full Send always applies once at 8000 RPM regardless of the curves setting.
+
+After applying in one-shot mode, `get-speed` is called; actual RPM appears in a 5 s auto-clearing status line. Errors surface in red. `hurly` needs to be in the `i2c` group (or `sudo -n` must work). Last-used profile saved to `~/.local/state/omarchy/task-manager/fan-profile`.
 
 ## Compact / expand
 
@@ -70,6 +71,7 @@ The gear button to the right of the Processes toggle opens a popover:
 | Remember last state | Restore compact/expanded across sessions |
 | Refresh interval | 500 ms / 1 s / 2 s / 5 s — updates the live timer |
 | Show GPU row | Hides/shows the GPU % + temp row |
+| Temp-driven fan curves | Saver / Balanced / Performance continuously track CPU temp → RPM; Full Send unaffected |
 | Pin to bottom-right | Move to bottom-right on expand |
 
 Settings saved to `~/.local/state/omarchy/task-manager/prefs.json`.
