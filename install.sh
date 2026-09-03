@@ -62,8 +62,8 @@ snippet = "\n".join(
         f'o.launch_on_start("{bin_dst}")',
         f'o.window("{klass}", {{',
         "  float = true,",
-        '  size = { "monitor_w * 0.5", "monitor_h * 0.5" },',
-        '  move = { "monitor_w * 0.5", "monitor_h * 0.5" },',
+        '  size = { "monitor_w * 0.5", "monitor_h * 0.25" },',
+        '  move = { "monitor_w * 0.5", "monitor_h * 0.75" },',
         "})",
         end,
         "",
@@ -146,5 +146,5 @@ ensure_hyprland_requires_autostart
 echo "Installed Task Manager."
 echo "Launch: ${BIN_DST}"
 echo "Or open \"Task Manager\" from Walker / the application menu."
-echo "Hyprland: autostart + bottom-right quarter in ${AUTOSTART_LUA}"
+echo "Hyprland: autostart + bottom-right strip (50%×25%) in ${AUTOSTART_LUA}"
 echo "Reload with: hyprctl reload"
