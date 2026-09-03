@@ -1,7 +1,11 @@
 // Omarchy bar widget: keyboard RGB backlight control.
 // Drives /usr/local/bin/x1e-ec-tool kb '#rrggbb' (solid color, ASUS Vivobook x1e).
-// Persists state to ~/.local/state/omarchy/kbd-backlight as JSON.
-// On shell start the last colour is restored automatically.
+//
+// State file (Omarchy idle-helper contract):
+//   ~/.local/state/omarchy/task-manager/kbd-backlight
+//   JSON: {"hex":"#rrggbb","enabled":true}
+//   Written atomically (mktemp + rename) on every change AND on startup apply.
+//   Idle helper: dim → kb #000000; activity → if enabled, kb hex from file.
 
 import QtQuick
 import QtQuick.Controls
@@ -14,10 +18,10 @@ BarWidget {
     moduleName: "sw.art.kbd-backlight"
 
     // ── Live state ──────────────────────────────────────────────────────────
-    // baseHex: full-brightness color chosen by user (#rrggbb).
-    // brightness: slider 0–100; scales RGB channels linearly.
-    // kbdEnabled: off toggle (independent of brightness).
-    // actualHex: computed colour sent to the EC and written to the state file.
+    // baseHex: full-brightness chosen color (#rrggbb).
+    // brightness: 0–100; scales RGB channels of baseHex linearly.
+    // kbdEnabled: explicit off toggle.
+    // actualHex: computed color sent to EC and written as "hex" in state file.
     property string  baseHex:    "#ffffff"
     property int     brightness: 100
     property bool    kbdEnabled: true
@@ -27,8 +31,9 @@ BarWidget {
         if (brightness === 100) return baseHex.toLowerCase()
         var h = baseHex.slice(1).toLowerCase()
         if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2]
-        function sc(offset) {
-            var v = Math.max(0, Math.min(255, Math.round(parseInt(h.substr(offset, 2), 16) * brightness / 100)))
+        function sc(off) {
+            var v = Math.max(0, Math.min(255,
+                Math.round(parseInt(h.substr(off, 2), 16) * brightness / 100)))
             var s = v.toString(16)
             return s.length < 2 ? "0"+s : s
         }
@@ -36,7 +41,7 @@ BarWidget {
     }
 
     // ── Debounce timers ─────────────────────────────────────────────────────
-    // Prevents spamming the EC during slider drags.
+    // Prevents spamming the EC or disk during slider drags.
     Timer {
         id: applyTimer
         interval: 100
@@ -46,23 +51,19 @@ BarWidget {
 
     Timer {
         id: saveTimer
-        interval: 250
+        interval: 150
         repeat: false
         onTriggered: root._doSave()
     }
 
-    // ── EC process ──────────────────────────────────────────────────────────
+    // ── Processes ───────────────────────────────────────────────────────────
     Process {
         id: ecProc
         onRunningChanged: {
-            if (!running && applyTimer.running) {
-                // A queued apply fired while EC was busy; honour it now.
-                applyTimer.restart()
-            }
+            if (!running && applyTimer.running) applyTimer.restart()
         }
     }
 
-    // ── Save process ────────────────────────────────────────────────────────
     Process {
         id: saveProc
         onRunningChanged: {
@@ -70,7 +71,7 @@ BarWidget {
         }
     }
 
-    // ── Init: read saved state then apply ──────────────────────────────────
+    // ── Startup: read saved state then apply ────────────────────────────────
     Process {
         id: initProc
         stdout: SplitParser {
@@ -79,12 +80,14 @@ BarWidget {
                 if (!l || l === "{}") return
                 try {
                     var d = JSON.parse(l)
-                    // Restore the UI base colour.
-                    // _base holds the pre-scaled colour; fall back to hex itself.
-                    var base = (d._base && /^#[0-9a-fA-F]{6}$/.test(d._base))
+                    // Restore the base colour for the UI.
+                    // _base holds the pre-scaled colour written by previous builds;
+                    // fall back to hex itself (which is actualHex at save time).
+                    var col = (d._base && /^#[0-9a-fA-F]{6}$/.test(d._base))
                         ? d._base.toLowerCase()
-                        : ((d.hex && /^#[0-9a-fA-F]{6}$/.test(d.hex)) ? d.hex.toLowerCase() : null)
-                    if (base) root.baseHex = base
+                        : ((d.hex && /^#[0-9a-fA-F]{6}$/.test(d.hex))
+                            ? d.hex.toLowerCase() : null)
+                    if (col) root.baseHex = col
 
                     if (typeof d.brightness === "number")
                         root.brightness = Math.max(0, Math.min(100, Math.round(d.brightness)))
@@ -96,15 +99,18 @@ BarWidget {
         }
         onRunningChanged: {
             if (!running) {
-                // State has been read; apply the restored colour to the keyboard.
+                // Apply the restored colour to the EC immediately.
                 root._doApply()
+                // Write the file in the canonical format (normalises any old format).
+                root._doSave()
             }
         }
     }
 
     Component.onCompleted: {
         initProc.command = ["/bin/bash", "-c",
-            "cat \"$HOME/.local/state/omarchy/kbd-backlight\" 2>/dev/null || echo '{}'"]
+            "cat \"$HOME/.local/state/omarchy/task-manager/kbd-backlight\" 2>/dev/null" +
+            " || echo '{}'"]
         initProc.running = true
     }
 
@@ -113,26 +119,26 @@ BarWidget {
         if (ecProc.running) { applyTimer.restart(); return }
         var hex = actualHex
         ecProc.command = ["/bin/bash", "-c",
-            "ec=/usr/local/bin/x1e-ec-tool; " +
-            "\"$ec\" kb '" + hex + "' 2>/dev/null || " +
-            "sudo -n \"$ec\" kb '" + hex + "' 2>/dev/null || true"]
+            "ec=/usr/local/bin/x1e-ec-tool;" +
+            " \"$ec\" kb '" + hex + "' 2>/dev/null ||" +
+            " sudo -n \"$ec\" kb '" + hex + "' 2>/dev/null || true"]
         ecProc.running = true
     }
 
+    // Writes the canonical idle-helper contract file atomically.
+    // Format: {"hex":"#rrggbb","enabled":true}
+    // hex = actualHex (the exact colour currently sent to the EC).
+    // enabled = kbdEnabled && brightness > 0.
     function _doSave() {
         if (saveProc.running) { saveTimer.restart(); return }
         var en = kbdEnabled && brightness > 0
-        // hex = actual colour sent to EC (for idle-helper restore).
-        // _base + brightness = pre-scaled info for UI restore.
-        var payload = ('{"hex":"' + actualHex + '"' +
-                       ',"enabled":' + (en ? "true" : "false") +
-                       ',"brightness":' + brightness +
-                       ',"_base":"' + baseHex.toLowerCase() + '"}')
+        var payload = '{"hex":"' + actualHex + '","enabled":' + (en ? "true" : "false") + '}'
         saveProc.command = ["/bin/bash", "-c",
-            "d=\"$HOME/.local/state/omarchy\"; mkdir -p \"$d\" && " +
-            "t=$(mktemp \"$d/kbd-backlight.XXXXXX\") && " +
-            "printf '%s\\n' '" + payload + "' > \"$t\" && " +
-            "mv \"$t\" \"$d/kbd-backlight\""]
+            "d=\"$HOME/.local/state/omarchy/task-manager\";" +
+            " mkdir -p \"$d\" &&" +
+            " t=$(mktemp \"$d/kbd-backlight.XXXXXX\") &&" +
+            " printf '%s\\n' '" + payload + "' > \"$t\" &&" +
+            " mv \"$t\" \"$d/kbd-backlight\""]
         saveProc.running = true
     }
 
@@ -142,7 +148,7 @@ BarWidget {
         saveTimer.restart()
     }
 
-    // Validate and normalise a hex string to lowercase #rrggbb or return null.
+    // Validate and normalise a hex string to lowercase #rrggbb, or return null.
     function normaliseHex(s) {
         s = s.trim().toLowerCase()
         if (/^#[0-9a-f]{6}$/.test(s)) return s
@@ -178,7 +184,7 @@ BarWidget {
     Popup {
         id: popover
         parent: root
-        // Centre the popup over the bar button; Qt clamps it on-screen.
+        // Centre over the bar button; Qt clamps to screen edges.
         x: Math.round((root.width - width) / 2)
         y: root.height + 2
         width: 272
@@ -225,7 +231,6 @@ BarWidget {
                     Layout.fillWidth: true
 
                     Repeater {
-                        // 8 swatches: white, warm, red, orange, green, cyan, blue, purple
                         model: ["#ffffff", "#ffd080", "#ff3333", "#ff8800",
                                 "#33ee44", "#00eeee", "#3388ff", "#cc44ff"]
                         delegate: Rectangle {
@@ -250,7 +255,7 @@ BarWidget {
                     }
                 }
 
-                // ── Hex input ─────────────────────────────────────────────
+                // ── Hex entry ─────────────────────────────────────────────
                 RowLayout {
                     spacing: 8
                     Layout.fillWidth: true
@@ -285,7 +290,6 @@ BarWidget {
                             if (root.brightness === 0) root.brightness = 100
                             root.applyAndSave()
                         }
-                        // Keep input in sync when preset is clicked.
                         Connections {
                             target: root
                             function onBaseHexChanged() {
@@ -294,7 +298,7 @@ BarWidget {
                         }
                     }
 
-                    // Live colour preview swatch.
+                    // Live preview swatch.
                     Rectangle {
                         width: 22; height: 22; radius: 4
                         color: root.actualHex
@@ -356,22 +360,24 @@ BarWidget {
                     }
                 }
 
-                // ── On / off row ──────────────────────────────────────────
+                // ── On / off toggle ───────────────────────────────────────
                 RowLayout {
                     spacing: 8
                     Layout.fillWidth: true
 
                     Label {
-                        text: root.kbdEnabled && root.brightness > 0 ? "On" : "Off"
+                        text: (root.kbdEnabled && root.brightness > 0) ? "On" : "Off"
                         color: "#a6adc8"
                         font.pixelSize: 12
                         Layout.fillWidth: true
                     }
 
-                    // Styled toggle using a simple button pair.
                     Rectangle {
                         width: 46; height: 24; radius: 12
                         color: (root.kbdEnabled && root.brightness > 0) ? "#89b4fa" : "#45475a"
+
+                        Behavior on color { ColorAnimation { duration: 120 } }
+
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
@@ -386,6 +392,7 @@ BarWidget {
                                 root.applyAndSave()
                             }
                         }
+
                         Rectangle {
                             width: 18; height: 18; radius: 9
                             color: "#1e1e2e"
