@@ -31,7 +31,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.4-2"
+APP_VERSION = "0.5.5-3"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -99,6 +99,7 @@ DEFAULT_PREFS: dict = {
     "refresh_ms": 1000,
     "last_compact": True,   # compact on first run (matches v2 behaviour)
     "fan_curves": True,     # temp-driven fan curves for Battery saver/Balance/Performance
+    "start_hidden": True,   # move to special:taskmanager on launch; bar icon shows/hides it
 }
 
 COL_NAME, COL_PID, COL_CPU, COL_CPU_TXT, COL_RSS, COL_RSS_TXT = range(6)
@@ -1121,6 +1122,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._expanded = False
         self._tick_id = 0
         self._focus_out_id = 0
+        self._startup_hide_done = False
 
         self._build_ui()
         self._apply_startup_state()
@@ -1353,6 +1355,15 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._p_remember.connect("toggled", self._on_p_remember)
         box.append(self._p_remember)
 
+        self._p_start_hidden = Gtk.CheckButton(label="Start hidden")
+        self._p_start_hidden.set_tooltip_text(
+            "On launch, move the window to special:taskmanager.\n"
+            "Use the bar icon to show or hide it."
+        )
+        self._p_start_hidden.set_active(self._prefs.get("start_hidden", True))
+        self._p_start_hidden.connect("toggled", self._on_p_start_hidden)
+        box.append(self._p_start_hidden)
+
         # Refresh
         box.append(section("Refresh"))
         refresh_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1433,6 +1444,16 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             self.unmaximize()
         except Exception:
             pass
+        if not self._startup_hide_done and self._prefs.get("start_hidden", True):
+            self._startup_hide_done = True
+            # Wait ~150 ms so Hyprland has registered the window before we move it.
+            GLib.timeout_add(150, self._do_startup_hide)
+
+    def _do_startup_hide(self) -> bool:
+        threading.Thread(
+            target=self._hide_to_special, daemon=True, name="startup-hide"
+        ).start()
+        return False
 
     def _on_close(self, *_args) -> bool:
         if self._tick_id:
@@ -1541,6 +1562,10 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
 
     def _on_p_remember(self, btn: Gtk.CheckButton) -> None:
         self._prefs["remember_expand"] = btn.get_active()
+        save_prefs(self._prefs)
+
+    def _on_p_start_hidden(self, btn: Gtk.CheckButton) -> None:
+        self._prefs["start_hidden"] = btn.get_active()
         save_prefs(self._prefs)
 
     def _on_p_refresh(self, dropdown: Gtk.DropDown, _pspec) -> None:
