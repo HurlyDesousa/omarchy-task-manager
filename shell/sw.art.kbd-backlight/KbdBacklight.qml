@@ -9,7 +9,8 @@
 //   Fields read by external helpers:
 //     hex      — actual colour currently sent to EC (for idle restore)
 //     enabled  — whether keyboard backlight is on (kbdEnabled && brightness > 0)
-//     auto_off — when true, IdleMonitor may dim the keyboard on idle (default: true)
+//     auto_off — when true, IdleMonitor sends kb #000000 on idle (keyboard only;
+//                screen dim at 3 min runs regardless of this flag)
 //     autostart— when true, restore last colour/brightness/enabled on session start
 //
 // Panel pattern: Panel (qs.Ui) + KeyboardPanel (qs.Ui) anchored to the bar button.
@@ -532,7 +533,8 @@ Panel {
                     }
 
                     // ── Auto-off toggle ───────────────────────────────────
-                    // When on: Omarchy IdleMonitor may dim keyboard on idle (3-min).
+                    // When on: IdleMonitor sends kb #000000 on 3-min idle.
+                    // Screen dim runs regardless — this flag is keyboard-only.
                     RowLayout {
                         spacing: 8
                         Layout.fillWidth: true
@@ -547,7 +549,7 @@ Panel {
                                 font.pixelSize: 12
                             }
                             Label {
-                                text: "Dim with screen after 3 min idle"
+                                text: "Turn off keyboard (not screen) on 3 min idle"
                                 color: "#6c7086"
                                 font.pixelSize: 10
                             }
