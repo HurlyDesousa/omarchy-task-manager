@@ -58,12 +58,7 @@ end = "-- omarchy-task-manager end"
 snippet = "\n".join(
     [
         begin,
-        "-- Float bottom-right; no size rule so expand can grow freely.",
         f'o.launch_on_start("{bin_dst}")',
-        f'o.window("{klass}", {{',
-        "  float = true,",
-        '  move = { "monitor_w * 0.5", "monitor_h * 0.75" },',
-        "})",
         end,
         "",
     ]
@@ -145,5 +140,5 @@ ensure_hyprland_requires_autostart
 echo "Installed Task Manager."
 echo "Launch: ${BIN_DST}"
 echo "Or open \"Task Manager\" from Walker / the application menu."
-echo "Hyprland: autostart + float bottom-right (no size clamp) in ${AUTOSTART_LUA}"
+echo "Hyprland: autostart (launch-on-login) registered in ${AUTOSTART_LUA}"
 echo "Reload with: hyprctl reload"

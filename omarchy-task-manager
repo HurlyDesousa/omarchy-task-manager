@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omarchy Task Manager v5 — GTK4 CPU/GPU, thermal, fan curves, compact mode, settings."""
+"""Omarchy Task Manager — GTK4 CPU/GPU, thermal, fan curves, settings."""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ except (ImportError, ValueError) as exc:
 
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
-# Keep in sync with PKGBUILD pkgver-pkgrel (e.g. 0.5.0-2).
-APP_VERSION = "0.5.0-2"
+# Keep in sync with PKGBUILD pkgver-pkgrel.
+APP_VERSION = "0.5.1-1"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -96,8 +96,6 @@ DEFAULT_PREFS: dict = {
     "start_compact": False,
     "remember_expand": True,
     "refresh_ms": 1000,
-    "show_gpu": True,
-    "always_bottom_right": False,
     "last_compact": True,   # compact on first run (matches v2 behaviour)
     "fan_curves": True,     # temp-driven fan curves for Battery saver/Balance/Performance
 }
@@ -163,10 +161,9 @@ def _read_autostart_enabled() -> bool:
 def _set_autostart(enabled: bool) -> str:
     """Enable or disable autostart in autostart.lua.
 
-    Enabling: adds o.launch_on_start inside the marked block (creates the block
-    with float+move window rule if absent).
-    Disabling: removes only the o.launch_on_start line; the float+move o.window
-    rule is preserved so the window still positions correctly on manual launch.
+    Enabling: writes o.launch_on_start inside the marked block (launch-on-login
+    only; no window/float/move rules — the window is free-floating).
+    Disabling: removes the marked block entirely.
     Returns '' on success or an error description.
     """
     try:
@@ -202,37 +199,20 @@ def _set_autostart(enabled: bool) -> str:
                     + text[i_end + len(AUTOSTART_BLOCK_END) :]
                 )
             else:
-                # No marked block: append a new full block with window rule
-                window_rule = (
-                    f'o.window("{APP_ID}", {{\n'
-                    f"  float = true,\n"
-                    f'  move = {{ "monitor_w * 0.5", "monitor_h * 0.75" }},\n'
-                    f"}})"
-                )
                 block = (
                     f"\n{AUTOSTART_BLOCK_BEGIN}\n"
-                    f"-- Float bottom-right; no size rule so expand can grow freely.\n"
                     f"{launch_line}\n"
-                    f"{window_rule}\n"
                     f"{AUTOSTART_BLOCK_END}\n"
                 )
                 new_text = text.rstrip("\n") + "\n" + block
         else:
             if not has_block:
                 return ""  # nothing to change
-            block_inner = text[i_begin + len(AUTOSTART_BLOCK_BEGIN) : i_end]
-            # Remove only o.launch_on_start lines; keep o.window and comments
-            kept_lines = [
-                line
-                for line in block_inner.splitlines(keepends=True)
-                if not re.search(r"o\.launch_on_start\s*\(", line)
-            ]
+            # Remove the entire marked block when disabling.
             new_text = (
-                text[:i_begin]
-                + AUTOSTART_BLOCK_BEGIN
-                + "".join(kept_lines)
-                + AUTOSTART_BLOCK_END
-                + text[i_end + len(AUTOSTART_BLOCK_END) :]
+                text[:i_begin].rstrip("\n")
+                + "\n"
+                + text[i_end + len(AUTOSTART_BLOCK_END) :].lstrip("\n")
             )
 
         AUTOSTART_LUA.parent.mkdir(parents=True, exist_ok=True)
@@ -646,40 +626,6 @@ def expanded_monitor_size() -> tuple[int, int]:
         return 960, 540
     _, _, mw, mh = geo
     return max(640, int(mw * 0.5)), max(400, int(mh * 0.5))
-
-
-# ──────────────────────────────────────────────
-# Hyprland  (0.56.1 Lua eval API)
-# ──────────────────────────────────────────────
-
-def _hypr_eval(lua: str) -> None:
-    """Fire-and-forget hyprctl eval; never raises."""
-    try:
-        subprocess.run(
-            ["hyprctl", "eval", lua],
-            capture_output=True,
-            timeout=2.0,
-            check=False,
-            stdin=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
-
-
-def _hyprland_resize_window(width: int, height: int, expanded: bool) -> None:
-    """Resize + reposition via hyprctl eval Lua API (Hyprland 0.56.1).
-
-    dispatch resizewindowpixel / movewindowpixel are broken on 0.56.1 Lua;
-    we use hl.dsp.window.{resize,move} instead.
-    """
-    geo = _primary_monitor_geometry()
-    if geo is None:
-        return
-    _, _, mw, mh = geo
-    x = int(mw * 0.5)
-    y = int(mh * (0.5 if expanded else 0.75))
-    _hypr_eval(f"hl.dsp.window.resize({{ x = {width}, y = {height} }})")
-    _hypr_eval(f"hl.dsp.window.move({{ x = {x}, y = {y} }})")
 
 
 # ──────────────────────────────────────────────
@@ -1229,7 +1175,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._gpu_row.append(self.gpu_value)
         self._gpu_row.append(self.gpu_bar)
         self._gpu_row.append(self.gpu_temp_label)
-        self._gpu_row.set_visible(self._prefs.get("show_gpu", True))
 
         # Per-core FlowBox
         self.core_flow = Gtk.FlowBox()
@@ -1423,13 +1368,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         except AttributeError:
             pass  # GTK < 4.6; interval stays at startup value
 
-        # Display
-        box.append(section("Display"))
-        self._p_show_gpu = Gtk.CheckButton(label="Show GPU row")
-        self._p_show_gpu.set_active(self._prefs.get("show_gpu", True))
-        self._p_show_gpu.connect("toggled", self._on_p_show_gpu)
-        box.append(self._p_show_gpu)
-
         # Fan
         box.append(section("Fan"))
         self._p_fan_curves = Gtk.CheckButton(label="Temp-driven fan curves")
@@ -1441,20 +1379,12 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._p_fan_curves.connect("toggled", self._on_p_fan_curves)
         box.append(self._p_fan_curves)
 
-        # Window
-        box.append(section("Window"))
-        self._p_pin_br = Gtk.CheckButton(label="Pin to bottom-right")
-        self._p_pin_br.set_active(self._prefs.get("always_bottom_right", False))
-        self._p_pin_br.connect("toggled", self._on_p_pin_br)
-        box.append(self._p_pin_br)
-
         # Autostart
         box.append(section("Autostart"))
         self._p_autostart = Gtk.CheckButton(label="Start with Hyprland session")
         self._p_autostart.set_tooltip_text(
             "Adds/removes o.launch_on_start in\n"
-            "~/.config/hypr/autostart.lua.\n"
-            "The float+move window rule is preserved when disabled."
+            "~/.config/hypr/autostart.lua."
         )
         self._p_autostart.set_active(_read_autostart_enabled())
         self._p_autostart.connect("toggled", self._on_p_autostart)
@@ -1477,7 +1407,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             # Start compact: stats strip only
             self._expanded = False
             w, h = quarter_monitor_size()
-            self.set_size_request(w, h)
             self.set_default_size(w, h)
         else:
             # Start expanded: show process list immediately
@@ -1485,7 +1414,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             self._root.append(self._process_box)
             self.expand_btn.set_label("Processes \u25b4")
             w, h = expanded_monitor_size()
-            self.set_size_request(0, 0)
             self.set_default_size(w, h)
 
         # Resume curve loop for last-used profile if pref is on
@@ -1500,8 +1428,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             self.unmaximize()
         except Exception:
             pass
-        w, h = (expanded_monitor_size() if self._expanded else quarter_monitor_size())
-        GLib.timeout_add(80, lambda: _hyprland_resize_window(w, h, self._expanded) or False)
 
     def _on_close(self, *_args) -> bool:
         if self._tick_id:
@@ -1520,12 +1446,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
 
     def _apply_window_geometry(self, expanded: bool) -> None:
         w, h = expanded_monitor_size() if expanded else quarter_monitor_size()
-        if expanded:
-            self.set_size_request(0, 0)
-        else:
-            self.set_size_request(w, h)
         self.set_default_size(w, h)
-        GLib.timeout_add(60, lambda: _hyprland_resize_window(w, h, expanded) or False)
 
     def _toggle_processes(self, *_args) -> None:
         self._expanded = not self._expanded
@@ -1558,16 +1479,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         if self._tick_id:
             GLib.source_remove(self._tick_id)
         self._tick_id = GLib.timeout_add(ms, self._tick)
-
-    def _on_p_show_gpu(self, btn: Gtk.CheckButton) -> None:
-        show = btn.get_active()
-        self._prefs["show_gpu"] = show
-        save_prefs(self._prefs)
-        self._gpu_row.set_visible(show)
-
-    def _on_p_pin_br(self, btn: Gtk.CheckButton) -> None:
-        self._prefs["always_bottom_right"] = btn.get_active()
-        save_prefs(self._prefs)
 
     def _on_p_autostart(self, btn: Gtk.CheckButton) -> None:
         want = btn.get_active()
@@ -1771,8 +1682,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._prev_cores = cores
 
     def _refresh_gpu(self) -> None:
-        if not self._prefs.get("show_gpu", True):
-            return
         usage = read_gpu_usage()
         if usage is None:
             self.gpu_value.set_text(EM_DASH)
