@@ -31,7 +31,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.3-2"
+APP_VERSION = "0.5.4-1"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -1119,12 +1119,14 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         # Window state
         self._expanded = False
         self._tick_id = 0
+        self._focus_out_id = 0
 
         self._build_ui()
         self._apply_startup_state()
 
         self.connect("map", self._on_map)
         self.connect("close-request", self._on_close)
+        self.connect("notify::is-active", self._on_is_active_changed)
 
         self._tick()
         self._tick_id = GLib.timeout_add(
@@ -1438,11 +1440,79 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         if self._profile_status_id:
             GLib.source_remove(self._profile_status_id)
             self._profile_status_id = 0
+        if self._focus_out_id:
+            GLib.source_remove(self._focus_out_id)
+            self._focus_out_id = 0
         self._stop_fan_curve_loop()
         if self._prefs.get("remember_expand", True):
             self._prefs["last_compact"] = not self._expanded
             save_prefs(self._prefs)
         return False
+
+    # ── Click-outside / focus-out dismiss ────────
+
+    def _on_is_active_changed(self, _window, _pspec) -> None:
+        """Schedule a hide when the window loses focus; cancel if it regains it."""
+        if self.get_property("is-active"):
+            if self._focus_out_id:
+                GLib.source_remove(self._focus_out_id)
+                self._focus_out_id = 0
+            return
+        if self._focus_out_id:
+            return
+        self._focus_out_id = GLib.timeout_add(250, self._maybe_hide_to_special)
+
+    def _maybe_hide_to_special(self) -> bool:
+        """Fired 250 ms after focus-out.  Hide unless a child dialog is active."""
+        self._focus_out_id = 0
+        # Regained focus in the meantime — stay visible.
+        if self.get_property("is-active"):
+            return False
+        # A child window (e.g. ConfirmDialog) is active — that's still "inside the app".
+        app = self.get_application()
+        if app is not None:
+            for win in app.get_windows():
+                if win is not self and win.get_visible() and win.get_property("is-active"):
+                    return False
+        threading.Thread(
+            target=self._hide_to_special, daemon=True, name="hide-self"
+        ).start()
+        return False
+
+    def _hide_to_special(self) -> None:
+        """Move this window to special:taskmanager — same path as omarchy-task-manager-toggle."""
+        try:
+            out = subprocess.run(
+                ["hyprctl", "clients", "-j"],
+                capture_output=True, text=True, timeout=2.0, check=False,
+                stdin=subprocess.DEVNULL,
+            )
+            if out.returncode != 0 or not out.stdout.strip():
+                return
+            clients = json.loads(out.stdout)
+        except Exception:
+            return
+        addr = None
+        for c in clients:
+            if c.get("class") == APP_ID:
+                ws_name = c.get("workspace", {}).get("name", "")
+                if not ws_name.startswith("special:"):
+                    addr = c.get("address")
+                    break
+        if not addr:
+            return
+        try:
+            subprocess.run(
+                [
+                    "hyprctl", "eval",
+                    f'hl.dispatch(hl.dsp.window.move({{ workspace = "special:taskmanager",'
+                    f' follow = false, window = "address:{addr}" }})',
+                ],
+                capture_output=True, timeout=2.0, check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
     # ── Expand / collapse ─────────────────────────
 
