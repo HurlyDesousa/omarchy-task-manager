@@ -28,7 +28,7 @@ Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip. `makepkg` install
 
 ## Compact layout
 
-By default the window shows CPU (overall + per-core), temperature, fan RPM (Fan L / Fan R), and four fan profile buttons. The process table is hidden until you click **Processes ▾**; click **Processes ▴** to collapse back to the compact strip. Expanding grows the GTK window and asks Hyprland (via `hyprctl`) to resize to 50%×50% in the bottom-right so the list is not clipped by the compact 25% strip rule. Collapsing returns to 50%×25%. Process data keeps refreshing while collapsed so the first expand is not an empty flash.
+By default the window shows CPU (overall + per-core), temperature, fan RPM (Fan L / Fan R), and four fan profile buttons. The process table is hidden until you click **Processes ▾**; click **Processes ▴** to collapse back to the compact strip. Expanding grows the GTK window and uses `hyprctl dispatch resizewindowpixel` to reach 50%×50% in the bottom-right; collapsing returns to the compact 50%×25% strip. Because no persistent Hyprland `size` rule is written, both resize steps work without the window being clamped. Process data keeps refreshing while collapsed so the first expand is not an empty flash.
 
 ## Fans (Vivobook S 15)
 
@@ -45,7 +45,7 @@ Uses `/usr/local/bin/x1e-ec-tool` (or `x1e-ec-tool` on PATH).
 | Performance | 2 | Performance |
 | Full speed | 3 | Full speed |
 
-Runs `x1e-ec-tool profile N` as the user first, then `sudo -n` with the same command if needed. Reading the active profile uses read-only commands only (`get-profile`, `profile get`, or `status` output) — never bare `x1e-ec-tool profile`, which can write the EC. The active profile is highlighted; a failed set shows a short status message and leaves the previous highlight.
+Runs `x1e-ec-tool profile N` as the user first, then `sudo -n` with the same command if needed. The active-profile highlight comes from the **last successful set** (persisted to `~/.local/state/omarchy/task-manager/fan-profile`). If no set has been made yet the app tries `x1e-ec-tool status` (non-mutating) as a one-time fallback — it never calls `get-profile` or `profile get`, which are not safe read-only on this EC. A failed set surfaces in a short status message below the buttons; it never silently discards the error.
 
 ## Hyprland
 
@@ -53,17 +53,16 @@ Runs `x1e-ec-tool profile N` as the user first, then `sudo -n` with the same com
 
 ```lua
 -- omarchy-task-manager begin
--- Bottom-right quarter + start with the Hyprland session.
+-- Float bottom-right; no size rule so expand can grow freely.
 o.launch_on_start("BIN")
 o.window("art.sw.omarchy.TaskManager", {
   float = true,
-  size = { "monitor_w * 0.5", "monitor_h * 0.25" },
   move = { "monitor_w * 0.5", "monitor_h * 0.75" },
 })
 -- omarchy-task-manager end
 ```
 
-Re-running `install.sh` updates size/move in the marked block. Unlabeled `o.launch_on_start` / `o.window` entries for this app are removed first so you never get a duplicate launch. Other autostart lines are untouched.
+No `size` rule is written. The compact GTK default (`quarter_monitor_size()`) provides the initial strip height; Hyprland never clamps the window, so clicking **Processes ▾** can freely resize to 50 × 50 %. Re-running `install.sh` replaces the marked block in place. Unlabeled `o.launch_on_start` / `o.window` entries for this app are removed first so you never get a duplicate launch. Other autostart lines are untouched.
 
 Omarchy already `require("hypr.autostart")` from `hyprland.lua`; `install.sh` only appends that require if missing.
 
