@@ -639,35 +639,34 @@ def _save_profile_index(idx: int) -> None:
 
 
 def _read_fan_profile_from_tool(exe: str) -> int | None:
-    """Read-only profile queries — never bare `profile` (that can write the EC)."""
-    readonly_suffixes: tuple[list[str], ...] = (
-        ["get-profile"],
-        ["profile", "get"],
-        ["status"],
-    )
-    for suffix in readonly_suffixes:
-        argv = [exe, *suffix]
-        _code, output = _run_fan_cmd(argv)
+    """Non-mutating profile query via `status` only.
+
+    Never calls get-profile or `profile get` — those are not safe read-only
+    on this EC.  `status` is acceptable only as a last resort when no
+    persisted value exists.
+    """
+    _code, output = _run_fan_cmd([exe, "status"])
+    parsed = _parse_profile_index(output)
+    if parsed is not None:
+        return parsed
+    sudo = shutil.which("sudo")
+    if sudo:
+        _code, output = _run_fan_cmd([sudo, "-n", exe, "status"])
         parsed = _parse_profile_index(output)
         if parsed is not None:
             return parsed
-        sudo = shutil.which("sudo")
-        if sudo:
-            _code, output = _run_fan_cmd([sudo, "-n", exe, *suffix])
-            parsed = _parse_profile_index(output)
-            if parsed is not None:
-                return parsed
     return None
 
 
 def read_fan_profile() -> int | None:
-    """Best-effort active profile index; uses last successful set if unreadable."""
+    """Active profile from last successful set; falls back to status query only."""
+    saved = _load_saved_profile()
+    if saved is not None:
+        return saved
     exe = _fan_executable()
     if exe:
-        parsed = _read_fan_profile_from_tool(exe)
-        if parsed is not None:
-            return parsed
-    return _load_saved_profile()
+        return _read_fan_profile_from_tool(exe)
+    return None
 
 
 def set_fan_profile_index(profile: int) -> tuple[bool, str]:
