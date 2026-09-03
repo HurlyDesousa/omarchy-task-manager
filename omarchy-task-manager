@@ -1364,6 +1364,15 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._p_start_hidden.connect("toggled", self._on_p_start_hidden)
         box.append(self._p_start_hidden)
 
+        self._p_autostart = Gtk.CheckButton(label="Start with Hyprland session")
+        self._p_autostart.set_tooltip_text(
+            "Adds/removes o.launch_on_start in\n"
+            "~/.config/hypr/autostart.lua."
+        )
+        self._p_autostart.set_active(_read_autostart_enabled())
+        self._p_autostart.connect("toggled", self._on_p_autostart)
+        box.append(self._p_autostart)
+
         # Refresh
         box.append(section("Refresh"))
         refresh_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1394,17 +1403,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._p_fan_curves.set_active(self._prefs.get("fan_curves", True))
         self._p_fan_curves.connect("toggled", self._on_p_fan_curves)
         box.append(self._p_fan_curves)
-
-        # Autostart
-        box.append(section("Autostart"))
-        self._p_autostart = Gtk.CheckButton(label="Start with Hyprland session")
-        self._p_autostart.set_tooltip_text(
-            "Adds/removes o.launch_on_start in\n"
-            "~/.config/hypr/autostart.lua."
-        )
-        self._p_autostart.set_active(_read_autostart_enabled())
-        self._p_autostart.connect("toggled", self._on_p_autostart)
-        box.append(self._p_autostart)
 
         version_lbl = Gtk.Label(label=f"Version {APP_VERSION}", xalign=0)
         _add_css_class(version_lbl, "dim")
