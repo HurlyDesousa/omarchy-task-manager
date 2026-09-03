@@ -59,6 +59,7 @@ snippet = "\n".join(
     [
         begin,
         f'o.launch_on_start("{bin_dst}")',
+        f'o.window("{klass}", {{ float = true }})',
         end,
         "",
     ]

@@ -31,7 +31,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.1-1"
+APP_VERSION = "0.5.1-2"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -161,8 +161,8 @@ def _read_autostart_enabled() -> bool:
 def _set_autostart(enabled: bool) -> str:
     """Enable or disable autostart in autostart.lua.
 
-    Enabling: writes o.launch_on_start inside the marked block (launch-on-login
-    only; no window/float/move rules — the window is free-floating).
+    Enabling: writes (or replaces) the marked block with o.launch_on_start +
+    float-only o.window rule — no size, move, pin, or position rules.
     Disabling: removes the marked block entirely.
     Returns '' on success or an error description.
     """
@@ -180,31 +180,33 @@ def _set_autostart(enabled: bool) -> str:
 
         if enabled:
             launch_line = f'o.launch_on_start("{APP_BINARY}")'
+            window_line = f'o.window("{APP_ID}", {{ float = true }})'
+            new_block = (
+                f"{AUTOSTART_BLOCK_BEGIN}\n"
+                f"{launch_line}\n"
+                f"{window_line}\n"
+                f"{AUTOSTART_BLOCK_END}\n"
+            )
             if has_block:
                 block_inner = text[i_begin + len(AUTOSTART_BLOCK_BEGIN) : i_end]
-                if re.search(r"o\.launch_on_start\s*\(", block_inner):
-                    return ""  # already present
-                # Insert launch line immediately after the begin marker + newline
-                skip = i_begin + len(AUTOSTART_BLOCK_BEGIN)
-                if skip < len(text) and text[skip] == "\n":
-                    skip += 1
-                new_text = (
-                    text[:i_begin]
-                    + AUTOSTART_BLOCK_BEGIN
-                    + "\n"
-                    + launch_line
-                    + "\n"
-                    + text[skip:i_end]
-                    + AUTOSTART_BLOCK_END
-                    + text[i_end + len(AUTOSTART_BLOCK_END) :]
+                # Skip rewrite only when block is already canonical float-only.
+                _window_re = re.compile(
+                    r'o\.window\s*\(\s*["\']' + re.escape(APP_ID) + r'["\']'
                 )
+                if (
+                    re.search(r"o\.launch_on_start\s*\(", block_inner)
+                    and _window_re.search(block_inner)
+                    and not re.search(r"\bmove\s*=", block_inner)
+                    and not re.search(r"\bsize\s*=", block_inner)
+                    and not re.search(r"\bpin\s*=", block_inner)
+                ):
+                    return ""  # already canonical; nothing to write
+                # Replace stale block (may have old size/move rules or missing float).
+                before = text[:i_begin].rstrip("\n") + "\n"
+                after = text[i_end + len(AUTOSTART_BLOCK_END) :].lstrip("\n")
+                new_text = before + new_block + ("\n" if after else "")  + after
             else:
-                block = (
-                    f"\n{AUTOSTART_BLOCK_BEGIN}\n"
-                    f"{launch_line}\n"
-                    f"{AUTOSTART_BLOCK_END}\n"
-                )
-                new_text = text.rstrip("\n") + "\n" + block
+                new_text = text.rstrip("\n") + "\n\n" + new_block
         else:
             if not has_block:
                 return ""  # nothing to change
