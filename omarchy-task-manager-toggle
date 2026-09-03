@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Toggle Task Manager window: launch if not running; hide to or show from
 # special:taskmanager using the Hyprland Lua eval API.
-# Replaces classic movetoworkspacesilent dispatch (fails rc7 on Lua Hyprland).
+# Calls must be wrapped in hl.dispatch() so Hyprland actually executes them
+# (bare hl.dsp.* calls return HL.Dispatcher objects and are no-ops).
 # App ID: art.sw.omarchy.TaskManager.
 
 CLASS="art.sw.omarchy.TaskManager"
@@ -20,9 +21,9 @@ ADDRESS=$(printf '%s' "$CLIENT" | jq -r '.address')
 WS_NAME=$(printf '%s' "$CLIENT" | jq -r '.workspace.name')
 
 if [[ "$WS_NAME" == special:* ]]; then
-    # Window is already in the special workspace; toggle it back into view.
-    hyprctl eval 'hl.dsp.workspace.toggle_special("taskmanager")' >/dev/null 2>&1
+    # Window is hidden in the special workspace; bring it back into view.
+    hyprctl eval 'hl.dispatch(hl.dsp.workspace.toggle_special("taskmanager"))' >/dev/null 2>&1
 else
     # Move window to special:taskmanager (hide), without warping the display.
-    hyprctl eval "hl.dsp.window.move({ workspace = \"special:taskmanager\", follow = false, window = \"address:${ADDRESS}\" })" >/dev/null 2>&1
+    hyprctl eval "hl.dispatch(hl.dsp.window.move({ workspace = \"special:taskmanager\", follow = false, window = \"address:${ADDRESS}\" }))" >/dev/null 2>&1
 fi
