@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omarchy Task Manager v4 — GTK4 CPU/GPU, thermal, fan curves, compact mode, settings."""
+"""Omarchy Task Manager v5 — GTK4 CPU/GPU, thermal, fan curves, compact mode, settings."""
 
 from __future__ import annotations
 
@@ -48,6 +48,12 @@ THEME_DIR = Path.home() / ".local" / "state" / "omarchy" / "current" / "theme"
 STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "task-manager"
 PROFILE_STATE = STATE_DIR / "fan-profile"
 PREFS_FILE = STATE_DIR / "prefs.json"
+
+# Hyprland autostart integration
+APP_BINARY = str(Path.home() / ".local" / "bin" / "omarchy-task-manager")
+AUTOSTART_LUA = Path.home() / ".config" / "hypr" / "autostart.lua"
+AUTOSTART_BLOCK_BEGIN = "-- omarchy-task-manager begin"
+AUTOSTART_BLOCK_END = "-- omarchy-task-manager end"
 
 # GPU devfreq (Snapdragon X Elite, simple_ondemand)
 GPU_DEVFREQ = Path("/sys/class/devfreq/3d00000.gpu")
@@ -134,6 +140,104 @@ def save_prefs(prefs: dict) -> None:
         PREFS_FILE.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
     except Exception:
         pass
+
+
+def _read_autostart_enabled() -> bool:
+    """Return True if the marked block in autostart.lua has an active o.launch_on_start line."""
+    try:
+        text = AUTOSTART_LUA.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    i_begin = text.find(AUTOSTART_BLOCK_BEGIN)
+    if i_begin < 0:
+        return False
+    i_end = text.find(AUTOSTART_BLOCK_END, i_begin)
+    if i_end < 0:
+        return False
+    block = text[i_begin:i_end]
+    return bool(re.search(r"o\.launch_on_start\s*\(", block))
+
+
+def _set_autostart(enabled: bool) -> str:
+    """Enable or disable autostart in autostart.lua.
+
+    Enabling: adds o.launch_on_start inside the marked block (creates the block
+    with float+move window rule if absent).
+    Disabling: removes only the o.launch_on_start line; the float+move o.window
+    rule is preserved so the window still positions correctly on manual launch.
+    Returns '' on success or an error description.
+    """
+    try:
+        try:
+            text = AUTOSTART_LUA.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = "-- Extra autostart processes.\n"
+
+        i_begin = text.find(AUTOSTART_BLOCK_BEGIN)
+        i_end = (
+            text.find(AUTOSTART_BLOCK_END, i_begin) if i_begin >= 0 else -1
+        )
+        has_block = i_begin >= 0 and i_end >= 0
+
+        if enabled:
+            launch_line = f'o.launch_on_start("{APP_BINARY}")'
+            if has_block:
+                block_inner = text[i_begin + len(AUTOSTART_BLOCK_BEGIN) : i_end]
+                if re.search(r"o\.launch_on_start\s*\(", block_inner):
+                    return ""  # already present
+                # Insert launch line immediately after the begin marker + newline
+                skip = i_begin + len(AUTOSTART_BLOCK_BEGIN)
+                if skip < len(text) and text[skip] == "\n":
+                    skip += 1
+                new_text = (
+                    text[:i_begin]
+                    + AUTOSTART_BLOCK_BEGIN
+                    + "\n"
+                    + launch_line
+                    + "\n"
+                    + text[skip:i_end]
+                    + AUTOSTART_BLOCK_END
+                    + text[i_end + len(AUTOSTART_BLOCK_END) :]
+                )
+            else:
+                # No marked block: append a new full block with window rule
+                window_rule = (
+                    f'o.window("{APP_ID}", {{\n'
+                    f"  float = true,\n"
+                    f'  move = {{ "monitor_w * 0.5", "monitor_h * 0.75" }},\n'
+                    f"}})"
+                )
+                block = (
+                    f"\n{AUTOSTART_BLOCK_BEGIN}\n"
+                    f"-- Float bottom-right; no size rule so expand can grow freely.\n"
+                    f"{launch_line}\n"
+                    f"{window_rule}\n"
+                    f"{AUTOSTART_BLOCK_END}\n"
+                )
+                new_text = text.rstrip("\n") + "\n" + block
+        else:
+            if not has_block:
+                return ""  # nothing to change
+            block_inner = text[i_begin + len(AUTOSTART_BLOCK_BEGIN) : i_end]
+            # Remove only o.launch_on_start lines; keep o.window and comments
+            kept_lines = [
+                line
+                for line in block_inner.splitlines(keepends=True)
+                if not re.search(r"o\.launch_on_start\s*\(", line)
+            ]
+            new_text = (
+                text[:i_begin]
+                + AUTOSTART_BLOCK_BEGIN
+                + "".join(kept_lines)
+                + AUTOSTART_BLOCK_END
+                + text[i_end + len(AUTOSTART_BLOCK_END) :]
+            )
+
+        AUTOSTART_LUA.parent.mkdir(parents=True, exist_ok=True)
+        AUTOSTART_LUA.write_text(new_text, encoding="utf-8")
+        return ""
+    except OSError as exc:
+        return str(exc)
 
 
 def _load_saved_profile() -> str | None:
@@ -363,9 +467,13 @@ menubutton > button {{
   min-height: 24px;
   min-width: 28px;
   font-size: 13px;
+  color: {fg};
 }}
 menubutton > button:hover {{
   background-color: alpha({fg}, 0.08);
+  color: {fg};
+}}
+menubutton image {{
   color: {fg};
 }}
 treeview {{
@@ -1166,27 +1274,30 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self.profile_status = Gtk.Label(label="", xalign=0, wrap=True)
         _add_css_class(self.profile_status, "fan-status")
 
-        # Processes header: toggle (left) + spacer + gear (right)
-        proc_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        # Processes header: toggle | search (hexpand) | gear
+        proc_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.expand_btn = Gtk.Button(label="Processes \u25be")
         _add_css_class(self.expand_btn, "expand-toggle")
         self.expand_btn.set_halign(Gtk.Align.START)
         self.expand_btn.connect("clicked", self._toggle_processes)
 
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
+        # Search entry lives in the header permanently; always filters the store
+        self._search = Gtk.Entry()
+        self._search.set_placeholder_text("Filter by name or PID")
+        self._search.set_hexpand(True)
+        self._search.connect("changed", self._on_search)
 
-        gear_btn = Gtk.MenuButton()
-        gear_btn.set_label("\u2699")
+        self._gear_btn = Gtk.MenuButton()
+        self._gear_btn.set_icon_name("emblem-system-symbolic")
         try:
-            gear_btn.set_always_show_arrow(False)
+            self._gear_btn.set_always_show_arrow(False)
         except Exception:
             pass
-        gear_btn.set_popover(self._build_settings_popover())
+        self._gear_btn.set_popover(self._build_settings_popover())
 
         proc_hdr.append(self.expand_btn)
-        proc_hdr.append(spacer)
-        proc_hdr.append(gear_btn)
+        proc_hdr.append(self._search)
+        proc_hdr.append(self._gear_btn)
 
         stats.append(cpu_row)
         stats.append(self._gpu_row)
@@ -1197,10 +1308,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         stats.append(proc_hdr)
 
         # Process box — appended on expand, removed on collapse
-        self._search = Gtk.Entry()
-        self._search.set_placeholder_text("Filter by name or PID")
-        self._search.connect("changed", self._on_search)
-
+        # (search entry lives in the header; only scroll + footer toggle)
         self.store = Gtk.ListStore(str, int, float, str, int, str)
         self.filtered = self.store.filter_new()
         self.filtered.set_visible_func(self._row_visible)
@@ -1261,7 +1369,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._footer.append(self.end_btn)
 
         self._process_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self._process_box.append(self._search)
         self._process_box.append(self._scroll)
         self._process_box.append(self._footer)
 
@@ -1338,6 +1445,18 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._p_pin_br.set_active(self._prefs.get("always_bottom_right", False))
         self._p_pin_br.connect("toggled", self._on_p_pin_br)
         box.append(self._p_pin_br)
+
+        # Autostart
+        box.append(section("Autostart"))
+        self._p_autostart = Gtk.CheckButton(label="Start with Hyprland session")
+        self._p_autostart.set_tooltip_text(
+            "Adds/removes o.launch_on_start in\n"
+            "~/.config/hypr/autostart.lua.\n"
+            "The float+move window rule is preserved when disabled."
+        )
+        self._p_autostart.set_active(_read_autostart_enabled())
+        self._p_autostart.connect("toggled", self._on_p_autostart)
+        box.append(self._p_autostart)
 
         pop.set_child(box)
         return pop
@@ -1443,6 +1562,16 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
     def _on_p_pin_br(self, btn: Gtk.CheckButton) -> None:
         self._prefs["always_bottom_right"] = btn.get_active()
         save_prefs(self._prefs)
+
+    def _on_p_autostart(self, btn: Gtk.CheckButton) -> None:
+        want = btn.get_active()
+        err = _set_autostart(want)
+        if err:
+            # Revert the toggle and surface the error in the fan status label
+            btn.handler_block_by_func(self._on_p_autostart)
+            btn.set_active(not want)
+            btn.handler_unblock_by_func(self._on_p_autostart)
+            self._show_profile_status(f"Autostart: {err}", error=True)
 
     def _on_p_fan_curves(self, btn: Gtk.CheckButton) -> None:
         enabled = btn.get_active()

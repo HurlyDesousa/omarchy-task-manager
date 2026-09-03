@@ -1,6 +1,6 @@
 # omarchy-task-manager
 
-Native GTK4 task manager v4 for Omarchy: CPU/GPU stats, thermals, temp-driven fan curves, compact mode, settings, and a searchable process table.
+Native GTK4 task manager v5 for Omarchy: CPU/GPU stats, thermals, temp-driven fan curves, compact mode, settings, and a searchable process table.
 
 Application id: `art.sw.omarchy.TaskManager`
 
@@ -63,7 +63,11 @@ Expanded: 50 % × 50 % of monitor (bottom-right half).
 
 ## Settings (⚙)
 
-The gear button to the right of the Processes toggle opens a popover:
+The header strip always shows **Processes ▾ | Filter by name or PID | ⚙**. Typing in the search field filters the process list whether the panel is expanded or collapsed; the filtered view is ready on first expand.
+
+The ⚙ gear icon is CSS-colored from the live Omarchy theme (same `fg` color as the rest of the UI; re-applied on theme hot-swap).
+
+The gear button opens a settings popover:
 
 | Option | Effect |
 |---|---|
@@ -73,8 +77,9 @@ The gear button to the right of the Processes toggle opens a popover:
 | Show GPU row | Hides/shows the GPU % + temp row |
 | Temp-driven fan curves | Saver / Balanced / Performance continuously track CPU temp → RPM; Full Send unaffected |
 | Pin to bottom-right | Move to bottom-right on expand |
+| Start with Hyprland session | Adds/removes `o.launch_on_start` in `~/.config/hypr/autostart.lua`; the float+move window rule is preserved when disabled |
 
-Settings saved to `~/.local/state/omarchy/task-manager/prefs.json`.
+Settings saved to `~/.local/state/omarchy/task-manager/prefs.json`. The Autostart toggle writes directly to `autostart.lua` (no prefs.json entry).
 
 ## Hyprland
 
