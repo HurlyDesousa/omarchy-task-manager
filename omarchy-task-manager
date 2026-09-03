@@ -312,32 +312,52 @@ def apply_theme() -> None:
     )
 
 
-def watch_theme_dir(on_change) -> Gio.FileMonitor | None:
-    """Watch Omarchy live theme dir; on_change is called on the main loop."""
-    path = THEME_DIR
-    try:
-        if not path.exists() and not path.is_symlink():
-            parent = path.parent
-            if parent.is_dir():
-                path = parent
-            else:
-                return None
-    except OSError:
-        return None
-    gfile = Gio.File.new_for_path(str(path))
-    try:
-        monitor = gfile.monitor_directory(Gio.FileMonitorFlags.NONE, None)
-    except (GLib.Error, TypeError, AttributeError):
-        try:
-            monitor = gfile.monitor(Gio.FileMonitorFlags.NONE, None)
-        except Exception:
-            return None
+def _file_monitor_flags() -> Gio.FileMonitorFlags:
+    flags = Gio.FileMonitorFlags.NONE
+    if hasattr(Gio.FileMonitorFlags, "WATCH_MOVES"):
+        flags |= Gio.FileMonitorFlags.WATCH_MOVES
+    return flags
+
+
+def watch_theme_dir(on_change) -> list[Gio.FileMonitor]:
+    """Watch Omarchy state/theme paths; on_change runs on the main loop.
+
+    Watches ~/.local/state/omarchy (catches atomic current/ swaps) plus the
+    live theme directory when present.
+    """
+    flags = _file_monitor_flags()
+    monitors: list[Gio.FileMonitor] = []
+    seen: set[str] = set()
+    candidates = [
+        Path.home() / ".local" / "state" / "omarchy",
+        THEME_DIR.parent,
+        THEME_DIR,
+    ]
 
     def _changed(*_args) -> None:
         GLib.idle_add(on_change)
 
-    monitor.connect("changed", _changed)
-    return monitor
+    for path in candidates:
+        try:
+            if not path.is_dir() and not path.is_symlink():
+                continue
+            key = str(path.resolve() if path.is_symlink() else path)
+            if key in seen:
+                continue
+            seen.add(key)
+        except OSError:
+            continue
+        gfile = Gio.File.new_for_path(str(path))
+        try:
+            monitor = gfile.monitor_directory(flags, None)
+        except (GLib.Error, TypeError, AttributeError):
+            try:
+                monitor = gfile.monitor(flags, None)
+            except Exception:
+                continue
+        monitor.connect("changed", _changed)
+        monitors.append(monitor)
+    return monitors
 
 
 def _add_css_class(widget: Gtk.Widget, name: str) -> None:
@@ -377,6 +397,48 @@ def expanded_monitor_size() -> tuple[int, int]:
         return max(640, int(geo.width * 0.5)), max(400, int(geo.height * 0.5))
     except Exception:
         return 960, 540
+
+
+def _primary_monitor_geometry() -> tuple[int, int, int, int] | None:
+    try:
+        display = Gdk.Display.get_default()
+        if display is None:
+            return None
+        monitors = display.get_monitors()
+        if monitors.get_n_items() <= 0:
+            return None
+        geo = monitors.get_item(0).get_geometry()
+        return geo.x, geo.y, geo.width, geo.height
+    except Exception:
+        return None
+
+
+def _hyprland_resize_window(width: int, height: int, expanded: bool) -> None:
+    """Resize/move via hyprctl so static o.window rules do not clamp expanded height."""
+    hyprctl = shutil.which("hyprctl")
+    if not hyprctl:
+        return
+    geo = _primary_monitor_geometry()
+    if geo is None:
+        return
+    _ox, _oy, mw, mh = geo
+    x = max(0, int(mw * 0.5))
+    y = max(0, int(mh * (0.5 if expanded else 0.75)))
+    target = f"class:{APP_ID}"
+    for dispatch in (
+        f"resizewindowpixel exact {width} {height},{target}",
+        f"movewindowpixel exact {x} {y},{target}",
+    ):
+        try:
+            subprocess.run(
+                [hyprctl, "dispatch", dispatch],
+                capture_output=True,
+                timeout=1.5,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def cpu_pct(prev: tuple[int, int] | None, cur: tuple[int, int]) -> float:
@@ -576,21 +638,35 @@ def _save_profile_index(idx: int) -> None:
         pass
 
 
+def _read_fan_profile_from_tool(exe: str) -> int | None:
+    """Read-only profile queries — never bare `profile` (that can write the EC)."""
+    readonly_suffixes: tuple[list[str], ...] = (
+        ["get-profile"],
+        ["profile", "get"],
+        ["status"],
+    )
+    for suffix in readonly_suffixes:
+        argv = [exe, *suffix]
+        _code, output = _run_fan_cmd(argv)
+        parsed = _parse_profile_index(output)
+        if parsed is not None:
+            return parsed
+        sudo = shutil.which("sudo")
+        if sudo:
+            _code, output = _run_fan_cmd([sudo, "-n", exe, *suffix])
+            parsed = _parse_profile_index(output)
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def read_fan_profile() -> int | None:
     """Best-effort active profile index; uses last successful set if unreadable."""
     exe = _fan_executable()
     if exe:
-        for argv in ([exe, "get-profile"], [exe, "profile"]):
-            _code, output = _run_fan_cmd(argv)
-            parsed = _parse_profile_index(output)
-            if parsed is not None:
-                return parsed
-            sudo = shutil.which("sudo")
-            if sudo:
-                _code, output = _run_fan_cmd([sudo, "-n", exe, *argv[1:]])
-                parsed = _parse_profile_index(output)
-                if parsed is not None:
-                    return parsed
+        parsed = _read_fan_profile_from_tool(exe)
+        if parsed is not None:
+            return parsed
     return _load_saved_profile()
 
 
@@ -901,6 +977,10 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             self._profile_buttons[idx] = btn
             profile_row.append(btn)
 
+        self.profile_status = Gtk.Label(label="", xalign=0, wrap=True)
+        _add_css_class(self.profile_status, "dim")
+        self._profile_status_id = 0
+
         expand_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.expand_btn = Gtk.Button(label="Processes \u25be")
         _add_css_class(self.expand_btn, "expand-toggle")
@@ -912,6 +992,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         stats.append(self.core_flow)
         stats.append(meta)
         stats.append(profile_row)
+        stats.append(self.profile_status)
         stats.append(expand_row)
 
         self.search = Gtk.Entry()
@@ -999,20 +1080,24 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             w, h = quarter_monitor_size()
             self.set_default_size(w, h)
 
+    def _apply_window_geometry(self, expanded: bool) -> None:
+        w, h = expanded_monitor_size() if expanded else quarter_monitor_size()
+        self.set_default_size(w, h)
+        self.resize(w, h)
+        _hyprland_resize_window(w, h, expanded)
+
     def _toggle_processes(self, *_args) -> None:
         self._expanded = not self._expanded
         if self._expanded:
+            overall, cores = read_proc_stat()
+            self._refresh_procs(overall, cores)
             self._root.append(self._process_box)
             self.expand_btn.set_label("Processes \u25b4")
-            w, h = expanded_monitor_size()
-            self.set_default_size(w, h)
-            self.resize(w, h)
+            self._apply_window_geometry(True)
         else:
             self._root.remove(self._process_box)
             self.expand_btn.set_label("Processes \u25be")
-            w, h = quarter_monitor_size()
-            self.set_default_size(w, h)
-            self.resize(w, h)
+            self._apply_window_geometry(False)
 
     def _update_profile_highlight(self) -> None:
         for idx, btn in self._profile_buttons.items():
@@ -1023,6 +1108,19 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             else:
                 btn.get_style_context().remove_class("profile-active")
 
+    def _show_profile_status(self, message: str) -> None:
+        self.profile_status.set_text(message)
+        if self._profile_status_id:
+            GLib.source_remove(self._profile_status_id)
+            self._profile_status_id = 0
+        if message:
+            self._profile_status_id = GLib.timeout_add(5000, self._clear_profile_status)
+
+    def _clear_profile_status(self) -> bool:
+        self.profile_status.set_text("")
+        self._profile_status_id = 0
+        return False
+
     def _on_profile_clicked(self, _btn: Gtk.Button, profile: int) -> None:
         if self._profile_busy:
             return
@@ -1031,23 +1129,33 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             btn.set_sensitive(False)
 
         def worker() -> None:
-            ok, _msg = set_fan_profile_index(profile)
-            GLib.idle_add(self._profile_done, profile, ok)
+            ok, msg = set_fan_profile_index(profile)
+            GLib.idle_add(self._profile_done, profile, ok, msg)
 
         threading.Thread(target=worker, name="fan-profile", daemon=True).start()
 
-    def _profile_done(self, profile: int, ok: bool) -> None:
+    def _profile_done(self, profile: int, ok: bool, msg: str) -> None:
         self._profile_busy = False
         for btn in self._profile_buttons.values():
             btn.set_sensitive(True)
         if ok:
             self._active_profile = profile
             self._update_profile_highlight()
+            self._show_profile_status("")
+        else:
+            self._update_profile_highlight()
+            detail = (msg or "Could not set fan profile").strip()
+            if len(detail) > 120:
+                detail = detail[:117] + "..."
+            self._show_profile_status(f"Fan profile failed: {detail}")
 
     def _on_close(self, *_args) -> bool:
         if self._tick_id:
             GLib.source_remove(self._tick_id)
             self._tick_id = 0
+        if self._profile_status_id:
+            GLib.source_remove(self._profile_status_id)
+            self._profile_status_id = 0
         return False
 
     def _on_search(self, entry: Gtk.Entry) -> None:
@@ -1137,8 +1245,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             overall, cores = read_proc_stat()
             self._refresh_cpu(overall, cores)
             self._refresh_temp()
-            if self._expanded:
-                self._refresh_procs(overall, cores)
+            self._refresh_procs(overall, cores)
             self._schedule_fan()
         except Exception:
             pass
@@ -1313,20 +1420,20 @@ class TaskManagerApp(Gtk.Application):
             flags = Gio.ApplicationFlags.FLAGS_NONE
         super().__init__(application_id=APP_ID, flags=flags)
         self._window: TaskManagerWindow | None = None
-        self._theme_monitor: Gio.FileMonitor | None = None
+        self._theme_monitors: list[Gio.FileMonitor] = []
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
         apply_theme()
-        self._theme_monitor = watch_theme_dir(apply_theme)
+        self._theme_monitors = watch_theme_dir(apply_theme)
 
     def do_shutdown(self) -> None:
-        if self._theme_monitor is not None:
+        for monitor in self._theme_monitors:
             try:
-                self._theme_monitor.cancel()
+                monitor.cancel()
             except Exception:
                 pass
-            self._theme_monitor = None
+        self._theme_monitors = []
         Gtk.Application.do_shutdown(self)
 
     def do_activate(self) -> None:
