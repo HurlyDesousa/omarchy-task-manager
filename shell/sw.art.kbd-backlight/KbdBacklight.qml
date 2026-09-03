@@ -3,9 +3,14 @@
 //
 // State file (Omarchy idle-helper contract):
 //   ~/.local/state/omarchy/kbd-backlight
-//   JSON: {"hex":"#rrggbb","enabled":true}
+//   JSON: {"hex":"#rrggbb","enabled":true,"autostart":true,"auto_off":true,...}
 //   Written atomically (mktemp + rename) on every change AND on startup apply.
-//   Idle helper: dim → kb #000000; activity → if enabled, kb hex from file.
+//
+//   Fields read by external helpers:
+//     hex      — actual colour currently sent to EC (for idle restore)
+//     enabled  — whether keyboard backlight is on (kbdEnabled && brightness > 0)
+//     auto_off — when true, IdleMonitor may dim the keyboard on idle (default: true)
+//     autostart— when true, restore last colour/brightness/enabled on session start
 //
 // Panel pattern: Panel (qs.Ui) + KeyboardPanel (qs.Ui) anchored to the bar button.
 // This is the same architecture as omarchy.agents / omarchy.weather and avoids
@@ -30,6 +35,14 @@ Panel {
     property string  baseHex:    "#ffffff"
     property int     brightness: 100
     property bool    kbdEnabled: true
+
+    // ── Settings state ──────────────────────────────────────────────────────
+    // autostart: restore last color/brightness/enabled on session/bar start.
+    // autoOff:   IdleMonitor may dim keyboard on idle when true (written as auto_off).
+    // showSettings: controls whether gear panel is open in the KeyboardPanel.
+    property bool autostart:    true
+    property bool autoOff:      true
+    property bool showSettings: false
 
     readonly property string actualHex: {
         if (!kbdEnabled || brightness === 0) return "#000000"
@@ -85,9 +98,8 @@ Panel {
                 if (!l || l === "{}") return
                 try {
                     var d = JSON.parse(l)
-                    // Restore the base colour for the UI.
-                    // _base holds the pre-scaled colour written by previous builds;
-                    // fall back to hex itself (which is actualHex at save time).
+                    // Restore base colour for the UI.
+                    // _base is the pre-scaled colour; fall back to hex (actualHex at save time).
                     var col = (d._base && /^#[0-9a-fA-F]{6}$/.test(d._base))
                         ? d._base.toLowerCase()
                         : ((d.hex && /^#[0-9a-fA-F]{6}$/.test(d.hex))
@@ -99,14 +111,20 @@ Panel {
 
                     if (typeof d.enabled === "boolean")
                         root.kbdEnabled = d.enabled
+
+                    if (typeof d.autostart === "boolean")
+                        root.autostart = d.autostart
+
+                    if (typeof d.auto_off === "boolean")
+                        root.autoOff = d.auto_off
                 } catch(e) {}
             }
         }
         onRunningChanged: {
             if (!running) {
-                // Apply the restored colour to the EC immediately.
-                root._doApply()
-                // Write the file in the canonical format (normalises any old format).
+                // Only apply to the EC if autostart is enabled.
+                if (root.autostart) root._doApply()
+                // Always write the canonical prefs file (normalises any old format).
                 root._doSave()
             }
         }
@@ -130,14 +148,23 @@ Panel {
         ecProc.running = true
     }
 
-    // Writes the canonical idle-helper contract file atomically.
-    // Format: {"hex":"#rrggbb","enabled":true}
-    // hex = actualHex (the exact colour currently sent to the EC).
-    // enabled = kbdEnabled && brightness > 0.
+    // Writes the canonical prefs file atomically.
+    // Fields:
+    //   hex      — actualHex (exact colour sent to EC; idle-helper restore target)
+    //   enabled  — whether backlight is effectively on
+    //   _base    — pre-scaled base colour (for UI restore across sessions)
+    //   brightness — 0-100 (for UI restore)
+    //   autostart  — restore on session start (Omarchy / bar restart)
+    //   auto_off   — allow IdleMonitor to dim keyboard on idle
     function _doSave() {
         if (saveProc.running) { saveTimer.restart(); return }
         var en = kbdEnabled && brightness > 0
-        var payload = '{"hex":"' + actualHex + '","enabled":' + (en ? "true" : "false") + '}'
+        var payload = '{"hex":"' + actualHex + '"' +
+                      ',"enabled":' + (en ? "true" : "false") +
+                      ',"_base":"' + baseHex.toLowerCase() + '"' +
+                      ',"brightness":' + brightness +
+                      ',"autostart":' + (autostart ? "true" : "false") +
+                      ',"auto_off":' + (autoOff ? "true" : "false") + '}'
         saveProc.command = ["/bin/bash", "-c",
             "d=\"$HOME/.local/state/omarchy\";" +
             " mkdir -p \"$d\" &&" +
@@ -166,7 +193,6 @@ Panel {
     }
 
     // ── Bar button ──────────────────────────────────────────────────────────
-    // implicitWidth/Height tell the bar how big our slot is.
     implicitWidth:  button.implicitWidth
     implicitHeight: button.implicitHeight
 
@@ -181,14 +207,16 @@ Panel {
         // Use root.toggle() so the KeyboardPanel (layer-shell) opens/closes via
         // Panel.panelController — not a QtQuick.Controls Popup.
         onPressed: function(b) {
-            if (b !== Qt.RightButton) root.toggle()
+            if (b !== Qt.RightButton) {
+                // Reset settings view on close so next open starts on main panel.
+                if (root.opened) root.showSettings = false
+                root.toggle()
+            }
         }
     }
 
     // ── Panel ───────────────────────────────────────────────────────────────
     // KeyboardPanel is a layer-shell surface anchored to the bar button.
-    // It is positioned and shown/hidden by the Omarchy shell, matching the
-    // pattern used by omarchy.agents, omarchy.weather, and omarchy.clock.
     KeyboardPanel {
         id: kbdPanel
         anchorItem: button
@@ -198,7 +226,6 @@ Panel {
         contentWidth: 272
         contentHeight: panelContent.implicitHeight
 
-        // Background surface for the panel.
         Rectangle {
             anchors.fill: parent
             color: "#1e1e2e"
@@ -212,22 +239,55 @@ Panel {
                 spacing: 0
                 width: parent.width
 
-                // ── Header ────────────────────────────────────────────────────
-                Label {
-                    text: "Keyboard Backlight"
-                    font.pixelSize: 13
-                    font.bold: true
-                    color: "#cdd6f4"
+                // ── Header row: title + gear ──────────────────────────────
+                RowLayout {
+                    spacing: 0
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     Layout.leftMargin: 14
-                    Layout.rightMargin: 14
+                    Layout.rightMargin: 8
                     Layout.bottomMargin: 8
+
+                    Label {
+                        text: "Keyboard Backlight"
+                        font.pixelSize: 13
+                        font.bold: true
+                        color: "#cdd6f4"
+                        Layout.fillWidth: true
+                    }
+
+                    // Settings gear button — matches Omarchy themed treatment.
+                    Rectangle {
+                        id: gearBtn
+                        width: 26; height: 26; radius: 5
+                        color: root.showSettings ? "#313244" : "transparent"
+
+                        Behavior on color { ColorAnimation { duration: 100 } }
+
+                        Label {
+                            anchors.centerIn: parent
+                            // nf-md-cog (Material Design cog icon)
+                            text: "󰒓"
+                            font.pixelSize: 15
+                            color: root.showSettings ? "#89b4fa" : "#6c7086"
+
+                            Behavior on color { ColorAnimation { duration: 100 } }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.showSettings = !root.showSettings
+                        }
+                    }
                 }
 
                 Rectangle { height: 1; color: "#45475a"; Layout.fillWidth: true }
 
+                // ── Main controls (shown when showSettings is false) ───────
                 ColumnLayout {
+                    id: mainControls
+                    visible: !root.showSettings
                     spacing: 10
                     Layout.topMargin: 12
                     Layout.leftMargin: 14
@@ -254,64 +314,12 @@ Panel {
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         root.baseHex = swatch
-                                        hexInput.text = swatch
                                         if (!root.kbdEnabled) root.kbdEnabled = true
                                         if (root.brightness === 0) root.brightness = 100
                                         root.applyAndSave()
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    // ── Hex entry ─────────────────────────────────────────
-                    RowLayout {
-                        spacing: 8
-                        Layout.fillWidth: true
-
-                        Label {
-                            text: "Hex"
-                            color: "#a6adc8"
-                            font.pixelSize: 12
-                        }
-
-                        TextField {
-                            id: hexInput
-                            text: root.baseHex
-                            font.family: "monospace"
-                            font.pixelSize: 12
-                            color: "#cdd6f4"
-                            Layout.fillWidth: true
-                            leftPadding: 6; rightPadding: 6
-                            topPadding: 4; bottomPadding: 4
-                            background: Rectangle {
-                                color: "#313244"
-                                radius: 4
-                                border.color: hexInput.activeFocus ? "#89b4fa" : "#45475a"
-                                border.width: 1
-                            }
-                            onEditingFinished: {
-                                var v = root.normaliseHex(text)
-                                if (!v) { text = root.baseHex; return }
-                                root.baseHex = v
-                                text = v
-                                if (!root.kbdEnabled) root.kbdEnabled = true
-                                if (root.brightness === 0) root.brightness = 100
-                                root.applyAndSave()
-                            }
-                            Connections {
-                                target: root
-                                function onBaseHexChanged() {
-                                    if (!hexInput.activeFocus) hexInput.text = root.baseHex
-                                }
-                            }
-                        }
-
-                        // Live preview swatch.
-                        Rectangle {
-                            width: 22; height: 22; radius: 4
-                            color: root.actualHex
-                            border.color: "#45475a"; border.width: 1
                         }
                     }
 
@@ -407,6 +415,164 @@ Panel {
                                 color: "#1e1e2e"
                                 anchors.verticalCenter: parent.verticalCenter
                                 x: (root.kbdEnabled && root.brightness > 0) ? 25 : 3
+                                Behavior on x { NumberAnimation { duration: 120 } }
+                            }
+                        }
+                    }
+                }
+
+                // ── Settings panel (shown when showSettings is true) ───────
+                ColumnLayout {
+                    id: settingsControls
+                    visible: root.showSettings
+                    spacing: 10
+                    Layout.topMargin: 12
+                    Layout.leftMargin: 14
+                    Layout.rightMargin: 14
+                    Layout.bottomMargin: 14
+
+                    // ── Hex color input ───────────────────────────────────
+                    RowLayout {
+                        spacing: 8
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: "Hex"
+                            color: "#a6adc8"
+                            font.pixelSize: 12
+                        }
+
+                        TextField {
+                            id: hexInput
+                            text: root.baseHex
+                            font.family: "monospace"
+                            font.pixelSize: 12
+                            color: "#cdd6f4"
+                            Layout.fillWidth: true
+                            leftPadding: 6; rightPadding: 6
+                            topPadding: 4; bottomPadding: 4
+                            background: Rectangle {
+                                color: "#313244"
+                                radius: 4
+                                border.color: hexInput.activeFocus ? "#89b4fa" : "#45475a"
+                                border.width: 1
+                            }
+                            onEditingFinished: {
+                                var v = root.normaliseHex(text)
+                                if (!v) { text = root.baseHex; return }
+                                root.baseHex = v
+                                text = v
+                                if (!root.kbdEnabled) root.kbdEnabled = true
+                                if (root.brightness === 0) root.brightness = 100
+                                root.applyAndSave()
+                            }
+                            Connections {
+                                target: root
+                                function onBaseHexChanged() {
+                                    if (!hexInput.activeFocus) hexInput.text = root.baseHex
+                                }
+                            }
+                        }
+
+                        // Live color preview swatch.
+                        Rectangle {
+                            width: 22; height: 22; radius: 4
+                            color: root.actualHex
+                            border.color: "#45475a"; border.width: 1
+                        }
+                    }
+
+                    Rectangle { height: 1; color: "#313244"; Layout.fillWidth: true }
+
+                    // ── Autostart toggle ──────────────────────────────────
+                    // When on: restore last color/brightness/enabled on session/bar start.
+                    RowLayout {
+                        spacing: 8
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            spacing: 2
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: "Autostart"
+                                color: "#cdd6f4"
+                                font.pixelSize: 12
+                            }
+                            Label {
+                                text: "Restore on session / bar start"
+                                color: "#6c7086"
+                                font.pixelSize: 10
+                            }
+                        }
+
+                        Rectangle {
+                            width: 46; height: 24; radius: 12
+                            color: root.autostart ? "#89b4fa" : "#45475a"
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.autostart = !root.autostart
+                                    saveTimer.restart()
+                                }
+                            }
+
+                            Rectangle {
+                                width: 18; height: 18; radius: 9
+                                color: "#1e1e2e"
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: root.autostart ? 25 : 3
+                                Behavior on x { NumberAnimation { duration: 120 } }
+                            }
+                        }
+                    }
+
+                    // ── Auto-off toggle ───────────────────────────────────
+                    // When on: Omarchy IdleMonitor may dim keyboard on idle (3-min).
+                    RowLayout {
+                        spacing: 8
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            spacing: 2
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: "Auto-off on idle"
+                                color: "#cdd6f4"
+                                font.pixelSize: 12
+                            }
+                            Label {
+                                text: "Dim with screen after 3 min idle"
+                                color: "#6c7086"
+                                font.pixelSize: 10
+                            }
+                        }
+
+                        Rectangle {
+                            width: 46; height: 24; radius: 12
+                            color: root.autoOff ? "#89b4fa" : "#45475a"
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.autoOff = !root.autoOff
+                                    saveTimer.restart()
+                                }
+                            }
+
+                            Rectangle {
+                                width: 18; height: 18; radius: 9
+                                color: "#1e1e2e"
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: root.autoOff ? 25 : 3
                                 Behavior on x { NumberAnimation { duration: 120 } }
                             }
                         }
