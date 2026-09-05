@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.cursor",
   "name": "Cursor",
-  "version": "0.5.5-25",
+  "version": "0.5.5-26",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Bar launcher for the Cursor IDE — click to launch",
