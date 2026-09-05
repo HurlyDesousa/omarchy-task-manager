@@ -12,9 +12,11 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-APP_VERSION = "0.5.5-27"
+APP_VERSION = "0.5.5-29"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -688,26 +690,38 @@ def cmd_autostart_set(value: str) -> int:
     return 0
 
 
-# ── AI agent usage (Cursor / Codex / Grok) ───────────────────────────────────
+# ── AI agent usage (Cursor / Grok Bot / Grok build) ──────────────────────────
 # Part of the shared omarchy-task-manager CLI — keep ai-usage subcommands when
 # bumping pkgrel for unrelated TM / kbd / fan changes.
 
-AGENT_USAGE_IDS = ("cursor", "codex", "grok")
-AGENT_USAGE_NAMES = {"cursor": "Cursor", "codex": "Codex", "grok": "Grok"}
+AGENT_USAGE_IDS = ("cursor", "grokbot", "grok")
+AGENT_USAGE_NAMES = {
+    "cursor": "Cursor",
+    "grokbot": "Grok Bot",
+    "grok": "Grok (grok build)",
+}
+AGENT_USAGE_LEGACY_IDS: dict[str, tuple[str, ...]] = {
+    "grokbot": ("codex",),
+}
+AGENT_USAGE_COLLECTOR_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "grokbot": ("codex",),
+}
 USAGE_STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "agents" / "usage"
 USAGE_MISSING_HELP: dict[str, tuple[str, str]] = {
     "cursor": (
         "No Cursor usage data yet",
         "Sign in to Cursor on this laptop (~/.local/bin/cursor) and use the IDE; "
-        "the panel reads local state only (no cloud calls).",
+        "the panel reads local session state (no paid API calls from this panel).",
     ),
-    "codex": (
-        "Codex usage not loaded",
-        "Run `codex login`, then `omarchy agent usage-update codex` (or click refresh).",
+    "grokbot": (
+        "Grok Bot usage not loaded",
+        "Sign in to Grok Bot on this laptop, then refresh. "
+        "Reads local/session state only (no xAI API calls from this panel).",
     ),
     "grok": (
-        "No local Grok sessions",
-        "Use the grok CLI on this machine; reads ~/.grok/sessions only (no xAI API calls).",
+        "Grok (grok build) usage not loaded",
+        "Run `grok login` on this laptop, then refresh. "
+        "Reads ~/.grok session state and local billing cache (no paid API calls from this panel).",
     ),
 }
 
@@ -747,8 +761,28 @@ def _usage_base_record(agent_id: str) -> dict:
     }
 
 
-def _usage_read_record(agent_id: str) -> dict | None:
-    path = USAGE_STATE_DIR / f"{agent_id}.json"
+def _usage_record_score(record: dict | None) -> int:
+    if not record:
+        return 0
+    score = 0
+    limits = record.get("limits") if isinstance(record.get("limits"), list) else []
+    if limits:
+        score += 10 + len(limits)
+    if record.get("ready") is True:
+        score += 4
+    if record.get("hasLocalStats") is True:
+        score += 2
+    if _usage_number(record.get("todayTotalTokens")) > 0:
+        score += 1
+    if str(record.get("tierLabel") or "").strip():
+        score += 1
+    status = str(record.get("usageStatusText") or "").lower()
+    if "unavailable" in status or "not loaded" in status or status == "unavailable":
+        score -= 6
+    return score
+
+
+def _usage_load_state_file(path: Path) -> dict | None:
     if not path.is_file():
         return None
     try:
@@ -756,6 +790,81 @@ def _usage_read_record(agent_id: str) -> dict | None:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def _usage_read_record(agent_id: str) -> dict | None:
+    candidates: list[dict] = []
+    primary = _usage_load_state_file(USAGE_STATE_DIR / f"{agent_id}.json")
+    if primary is not None:
+        candidates.append(_usage_normalize_record(agent_id, primary))
+    for legacy_id in AGENT_USAGE_LEGACY_IDS.get(agent_id, ()):
+        legacy = _usage_load_state_file(USAGE_STATE_DIR / f"{legacy_id}.json")
+        if legacy is not None:
+            candidates.append(_usage_normalize_record(agent_id, legacy, legacy_id=legacy_id))
+    if not candidates:
+        return None
+    return max(candidates, key=_usage_record_score)
+
+
+def _usage_sanitize_grokbot_text(text: str) -> str:
+    """Rewrite legacy Codex-era user-facing strings for the Grok Bot panel."""
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+    out = raw
+    replacements = (
+        ("Codex limits unavailable", "Grok Bot limits unavailable"),
+        ("Codex usage unavailable", "Grok Bot usage unavailable"),
+        ("Codex usage not loaded", "Grok Bot usage not loaded"),
+        ("codex limits unavailable", "Grok Bot limits unavailable"),
+        ("codex usage unavailable", "Grok Bot usage unavailable"),
+        ("codex usage not loaded", "Grok Bot usage not loaded"),
+        ("`codex login`", "Grok Bot sign-in"),
+        ("codex login", "Grok Bot sign-in"),
+        ("usage-update codex", "usage-update grokbot"),
+        ("agent usage-update codex", "agent usage-update grokbot"),
+        ("omarchy-agent-usage-codex", "omarchy-agent-usage-grokbot"),
+    )
+    for old, new in replacements:
+        out = out.replace(old, new)
+    out = re.sub(r"\bCodex\b", "Grok Bot", out)
+    return out
+
+
+def _usage_sanitize_grokbot_record(record: dict) -> dict:
+    sanitized = dict(record)
+    for field in ("usageStatusText", "authHelpText", "name"):
+        if field in sanitized and sanitized[field] is not None:
+            sanitized[field] = _usage_sanitize_grokbot_text(str(sanitized[field]))
+    limits = sanitized.get("limits")
+    if isinstance(limits, list):
+        cleaned_limits: list[dict] = []
+        for entry in limits:
+            if not isinstance(entry, dict):
+                continue
+            item = dict(entry)
+            for key in ("label", "title", "caption"):
+                if key in item and item[key] is not None:
+                    item[key] = _usage_sanitize_grokbot_text(str(item[key]))
+            cleaned_limits.append(item)
+        sanitized["limits"] = cleaned_limits
+    return sanitized
+
+
+def _usage_normalize_record(agent_id: str, record: dict, legacy_id: str | None = None) -> dict:
+    normalized = dict(record)
+    normalized["id"] = agent_id
+    name = str(normalized.get("name") or "").strip()
+    legacy_names = {"Codex", "codex"} if agent_id == "grokbot" else set()
+    if not name or name in legacy_names or (legacy_id and name.lower() == legacy_id):
+        normalized["name"] = AGENT_USAGE_NAMES.get(agent_id, agent_id)
+    elif agent_id == "grok" and name in ("Grok", "Grok Build"):
+        normalized["name"] = AGENT_USAGE_NAMES["grok"]
+    if agent_id == "grokbot" or legacy_id == "codex" or str(record.get("id") or "") == "codex":
+        normalized = _usage_sanitize_grokbot_record(normalized)
+        normalized["id"] = agent_id
+        normalized["name"] = AGENT_USAGE_NAMES.get(agent_id, agent_id)
+    return normalized
 
 
 def _usage_write_record(agent_id: str, record: dict) -> None:
@@ -770,7 +879,14 @@ def _usage_write_record(agent_id: str, record: dict) -> None:
 
 
 def _usage_collector_paths(agent_id: str) -> list[Path]:
-    names = [f"omarchy-agent-usage-{agent_id}"]
+    names: list[str] = []
+    seen_names: set[str] = set()
+    for candidate in (agent_id, *AGENT_USAGE_COLLECTOR_FALLBACKS.get(agent_id, ())):
+        collector_name = f"omarchy-agent-usage-{candidate}"
+        if collector_name in seen_names:
+            continue
+        seen_names.add(collector_name)
+        names.append(collector_name)
     roots = []
     omarchy_path = os.environ.get("OMARCHY_PATH")
     if omarchy_path:
@@ -831,11 +947,16 @@ def _usage_run_collector(agent_id: str) -> tuple[bool, str]:
         if not isinstance(parsed, dict):
             errors.append(f"{collector.name}: unexpected record type")
             continue
+        legacy_id = "codex" if str(parsed.get("id") or "") == "codex" else None
+        parsed = _usage_normalize_record(agent_id, parsed, legacy_id=legacy_id)
         _usage_write_record(agent_id, parsed)
         return True, ""
     if not _usage_collector_paths(agent_id):
         return False, f"omarchy-agent-usage-{agent_id} not found on PATH"
-    return False, errors[-1] if errors else f"omarchy-agent-usage-{agent_id} failed"
+    err = errors[-1] if errors else f"omarchy-agent-usage-{agent_id} failed"
+    if agent_id == "grokbot":
+        err = _usage_sanitize_grokbot_text(err)
+    return False, err
 
 
 def _usage_run_omarchy_update(agents: tuple[str, ...]) -> str:
@@ -1121,14 +1242,243 @@ def _usage_collect_cursor_local() -> dict:
     return record
 
 
+def _usage_parse_reset_datetime(value: Any) -> time.struct_time | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.timetuple()
+    except ValueError:
+        pass
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        try:
+            return time.strptime(raw[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+    return None
+
+
+def _usage_reset_caption(resets_at: Any) -> str:
+    reset = _usage_parse_reset_datetime(resets_at)
+    if reset is None:
+        return ""
+    now = time.localtime()
+    reset_day = time.mktime(
+        (reset.tm_year, reset.tm_mon, reset.tm_mday, 0, 0, 0, 0, 0, -1)
+    )
+    today = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
+    days_left = max(0, int(round((reset_day - today) / 86400)))
+    month_names = (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sept", "Oct", "Nov", "Dec",
+    )
+    month = month_names[reset.tm_mon - 1]
+    day = str(reset.tm_mday)
+    if days_left == 0:
+        tail = "resets today"
+    elif days_left == 1:
+        tail = "1 day left"
+    else:
+        tail = f"{days_left} days left"
+    return f"Resets {day} {month} ({tail})"
+
+
+def _usage_limit_percent(limit: dict) -> float | None:
+    try:
+        percent = float(limit.get("percent"))
+    except (TypeError, ValueError):
+        return None
+    if percent != percent:
+        return None
+    if percent > 1:
+        percent /= 100.0
+    return min(1.0, max(0.0, percent))
+
+
+def _usage_panel_limit(
+    label: str,
+    percent: float | None,
+    *,
+    bar_style: str = "accent",
+    caption: str = "",
+    resets_at: Any = None,
+) -> dict:
+    entry: dict[str, Any] = {
+        "label": label,
+        "title": label,
+        "barStyle": bar_style,
+        "caption": caption,
+    }
+    if percent is not None:
+        entry["percent"] = percent
+    reset = str(resets_at or "").strip()
+    if reset:
+        entry["resetsAt"] = reset
+        reset_caption = _usage_reset_caption(reset)
+        if reset_caption:
+            entry["resetCaption"] = reset_caption
+    return entry
+
+
+def _usage_pick_limit(limits: list[dict], *needles: str) -> dict | None:
+    for entry in limits:
+        hay = " ".join(
+            str(entry.get(key) or "")
+            for key in ("label", "title", "kind", "period")
+        ).lower()
+        if any(needle in hay for needle in needles):
+            return entry
+    return None
+
+
+def _usage_cursor_panel_limits(limits: list[dict]) -> list[dict]:
+    cursor_entry = _usage_pick_limit(limits, "cursor model", "auto", "included")
+    other_entry = _usage_pick_limit(limits, "other model", "api")
+    if cursor_entry is None and limits:
+        cursor_entry = limits[0]
+    if other_entry is None and len(limits) > 1:
+        other_entry = limits[1]
+
+    rows: list[dict] = []
+    cursor_percent = _usage_limit_percent(cursor_entry) if cursor_entry else None
+    if cursor_entry is not None and cursor_percent is not None:
+        rows.append(
+            _usage_panel_limit(
+                "Cursor Models · Includes Cursor Grok and Composer",
+                cursor_percent,
+                bar_style="accent",
+                caption=(
+                    "Additional usage beyond limits consumes Other Models quota "
+                    "or on-demand spend."
+                ),
+                resets_at=cursor_entry.get("resetsAt"),
+            )
+        )
+    other_percent = _usage_limit_percent(other_entry) if other_entry else None
+    if other_entry is not None and other_percent is not None:
+        rows.append(
+            _usage_panel_limit(
+                "Other Models",
+                other_percent,
+                bar_style="muted",
+                caption="Additional usage beyond limits consumes on-demand spend.",
+                resets_at=other_entry.get("resetsAt"),
+            )
+        )
+    return rows
+
+
+def _usage_grokbot_panel_limits(limits: list[dict]) -> list[dict]:
+    weekly = _usage_pick_limit(limits, "week", "bot", "grok bot") or (limits[0] if limits else None)
+    if weekly is None:
+        return []
+    percent = _usage_limit_percent(weekly)
+    if percent is None:
+        return []
+    return [
+        _usage_panel_limit(
+            "Weekly usage",
+            percent,
+            bar_style="accent",
+            resets_at=weekly.get("resetsAt"),
+        )
+    ]
+
+
+def _usage_grok_build_panel_limits(limits: list[dict]) -> list[dict]:
+    build = (
+        _usage_pick_limit(limits, "grok build", "build")
+        or _usage_pick_limit(limits, "week", "month", "usage", "limit")
+        or (limits[0] if limits else None)
+    )
+    if build is None:
+        return []
+    percent = _usage_limit_percent(build)
+    if percent is None:
+        return []
+    label = str(build.get("title") or build.get("label") or "Usage").strip()
+    if label.lower().endswith(" limit"):
+        label = label[:-6].strip() or "Usage"
+    return [
+        _usage_panel_limit(
+            label,
+            percent,
+            bar_style="accent",
+            resets_at=build.get("resetsAt"),
+        )
+    ]
+
+
+def _usage_grokbot_overlay_limits() -> list[dict]:
+    overlay_path = Path.home() / ".config" / "omarchy" / "agents" / "grok.json"
+    if not overlay_path.is_file():
+        return []
+    try:
+        overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(overlay, dict):
+        return []
+    bot_pct = overlay.get("bot_pct")
+    if bot_pct is None:
+        return []
+    try:
+        percent = float(bot_pct)
+    except (TypeError, ValueError):
+        return []
+    if percent > 1:
+        percent /= 100.0
+    return [
+        _usage_panel_limit(
+            "Weekly usage",
+            min(1.0, max(0.0, percent)),
+            bar_style="accent",
+            resets_at=overlay.get("bot_reset_at"),
+        )
+    ]
+
+
+def _usage_panel_limits(agent_id: str, limits: list[dict]) -> list[dict]:
+    if agent_id == "cursor":
+        return _usage_cursor_panel_limits(limits)
+    if agent_id == "grokbot":
+        rows = _usage_grokbot_panel_limits(limits)
+        return rows if rows else _usage_grokbot_overlay_limits()
+    if agent_id == "grok":
+        return _usage_grok_build_panel_limits(limits)
+    return limits
+
+
 def _usage_normalize_auth_help(agent_id: str, record: dict) -> tuple[str, str]:
     usage_status = str(record.get("usageStatusText") or "").strip()
     auth_help = str(record.get("authHelpText") or "").strip()
+    if agent_id == "grokbot":
+        usage_status = _usage_sanitize_grokbot_text(usage_status)
+        auth_help = _usage_sanitize_grokbot_text(auth_help)
     if auth_help.lower() == "initialize":
-        auth_help = "Run `codex login`, then refresh (or `omarchy agent usage-update codex`)."
-    if agent_id == "codex" and "limits unavailable" in usage_status.lower():
+        if agent_id == "grokbot":
+            auth_help = (
+                "Sign in to Grok Bot on this laptop, then refresh "
+                "(or `omarchy agent usage-update grokbot`)."
+            )
+        elif agent_id == "grok":
+            auth_help = "Run `grok login`, then refresh (or `omarchy agent usage-update grok`)."
+        else:
+            auth_help = "Sign in to Cursor on this laptop, then refresh."
+    if agent_id == "grokbot" and "limits unavailable" in usage_status.lower():
         if not auth_help or auth_help.lower() == "initialize":
-            auth_help = "Run `codex login` to refresh rate limits; local stats may still apply."
+            auth_help = (
+                "Sign in to Grok Bot to refresh weekly limits; "
+                "local stats may still apply."
+            )
+    if agent_id == "grok" and "limits unavailable" in usage_status.lower():
+        if not auth_help or auth_help.lower() == "initialize":
+            auth_help = "Run `grok login` to refresh build limits; local stats may still apply."
     return usage_status, auth_help
 
 
@@ -1137,6 +1487,9 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
         status, help_text = USAGE_MISSING_HELP.get(
             agent_id, ("No usage data yet", "Open the panel again to collect usage.")
         )
+        if agent_id == "grokbot":
+            status = _usage_sanitize_grokbot_text(status)
+            help_text = _usage_sanitize_grokbot_text(help_text)
         return {
             "id": agent_id,
             "name": AGENT_USAGE_NAMES.get(agent_id, agent_id),
@@ -1152,12 +1505,13 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
         }
 
     limits = record.get("limits") if isinstance(record.get("limits"), list) else []
+    panel_limits = _usage_panel_limits(agent_id, limits)
     usage_status, auth_help = _usage_normalize_auth_help(agent_id, record)
     ready = record.get("ready") is True
     has_stats = record.get("hasLocalStats") is True or bool(record.get("modelUsage"))
     has_tokens = _usage_number(record.get("todayTotalTokens")) > 0
     has_prompts = _usage_number(record.get("todayPrompts")) > 0
-    has_limits = bool(limits)
+    has_limits = bool(panel_limits)
     has_tier = bool(str(record.get("tierLabel") or "").strip())
     available = ready or has_stats or has_limits or has_tier or has_tokens or has_prompts
     return {
@@ -1170,7 +1524,7 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
         "authHelpText": auth_help,
         "todayTotalTokens": _usage_number(record.get("todayTotalTokens")),
         "todayPrompts": _usage_number(record.get("todayPrompts")),
-        "limits": limits,
+        "limits": panel_limits,
         "updatedAt": str(record.get("updatedAt") or _usage_now_iso()),
     }
 
@@ -1187,18 +1541,21 @@ def cmd_ai_usage(refresh: bool = False) -> int:
 def cmd_ai_usage_update() -> int:
     USAGE_STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-    omarchy_err = _usage_run_omarchy_update(("codex",))
+    omarchy_err = _usage_run_omarchy_update(("grokbot",))
+    if omarchy_err:
+        _usage_run_omarchy_update(("codex",))
 
-    codex_ok, codex_err = _usage_run_collector("codex")
-    if not codex_ok and _usage_read_record("codex") is None:
-        record = _usage_base_record("codex")
-        record["usageStatusText"] = "Codex usage unavailable"
-        hint = codex_err or omarchy_err
+    grokbot_ok, grokbot_err = _usage_run_collector("grokbot")
+    if not grokbot_ok and _usage_read_record("grokbot") is None:
+        record = _usage_base_record("grokbot")
+        record["usageStatusText"] = "Grok Bot usage unavailable"
+        hint = _usage_sanitize_grokbot_text(grokbot_err or omarchy_err or "")
         record["authHelpText"] = (
-            f"Run `codex login`, then `omarchy agent usage-update codex`."
+            "Sign in to Grok Bot on this laptop, then refresh "
+            "(or `omarchy agent usage-update grokbot`)."
             + (f" ({hint})" if hint else "")
         )
-        _usage_write_record("codex", record)
+        _usage_write_record("grokbot", record)
 
     for agent_id, local_collector in (
         ("cursor", _usage_collect_cursor_local),
@@ -1229,7 +1586,10 @@ def main(argv: list[str] | None = None) -> int:
     autostart_set = sub.add_parser("autostart-set", help="Enable/disable Hyprland autostart block")
     autostart_set.add_argument("value")
 
-    ai_usage = sub.add_parser("ai-usage", help="Emit aggregated AI usage JSON for Cursor/Codex/Grok")
+    ai_usage = sub.add_parser(
+        "ai-usage",
+        help="Emit aggregated AI usage JSON for Cursor, Grok Bot, and Grok build",
+    )
     ai_usage.add_argument(
         "--refresh",
         action="store_true",

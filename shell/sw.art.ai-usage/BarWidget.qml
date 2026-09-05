@@ -68,7 +68,7 @@ BarWidget {
         id: button
         bar: root.bar
         text: "󰚩"
-        tooltipText: "AI usage (Cursor, Codex, Grok)"
+        tooltipText: "AI usage (Cursor, Grok Bot, Grok build)"
         onPressed: function(b) {
             if (b !== Qt.RightButton) root.togglePanel()
         }
