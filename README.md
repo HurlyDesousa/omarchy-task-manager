@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-31** — AI usage: rename Cursor subsection header from "Included in Pro+" / tier label to "Cursor" (0.5.5-31 pkgrel; dual quota bars / `ai-usage*` CLI / AI tray / kbd Omarchy restyle preserved).
+
 **0.5.5-30** — Keyboard RGB popover: Omarchy theme restyle (Style/Color tokens, Task Manager panel pattern); labelless header toggle preserved (0.5.5-30 pkgrel; AI usage bars / `ai-usage*` CLI / AI tray preserved).
 
 **0.5.5-29** — AI usage: sanitize legacy Codex strings to Grok Bot in panel JSON/status/auth help when reading `codex.json` (0.5.5-29 pkgrel; `ai-usage` / AI tray preserved).
