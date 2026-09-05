@@ -318,7 +318,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-14"
+                            text: "Version 0.5.5-15"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -346,7 +346,7 @@ Panel {
                             detailText: statText(root.snapshot.gpu ? root.snapshot.gpu.temp : null, "\u00b0C")
                             bar: root.bar
                         }
-                        StatRow {
+                        RamStatRow {
                             label: "RAM"
                             valueText: statText(root.snapshot.ram ? root.snapshot.ram.pct : null, "%")
                             fraction: pctFraction(root.snapshot.ram ? root.snapshot.ram.pct : 0)
@@ -606,6 +606,43 @@ Panel {
     }
 
     component StatRow: RowLayout {
+        property string label
+        property string valueText
+        property real fraction
+        property string detailText
+        property var bar
+        width: parent.width
+        spacing: Style.space(8)
+        Label {
+            text: label
+            Layout.preferredWidth: Style.space(36)
+            color: Qt.darker(bar.foreground, 1.4)
+            font.family: bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+        }
+        Label {
+            text: valueText
+            Layout.preferredWidth: Style.space(40)
+            color: bar.foreground
+            font.family: bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+        }
+        MeterBar {
+            Layout.fillWidth: true
+            fraction: parent.fraction
+            bar: parent.bar
+        }
+        Label {
+            text: detailText
+            Layout.preferredWidth: Style.space(72)
+            horizontalAlignment: Text.AlignRight
+            color: bar.foreground
+            font.family: bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+        }
+    }
+
+    component RamStatRow: RowLayout {
         property string label
         property string valueText
         property real fraction

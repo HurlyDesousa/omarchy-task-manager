@@ -94,6 +94,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-15** — Fix settings toggles for real: `prefs-get` now emits single-line JSON (Panel SplitParser was failing on pretty-printed output). Restore CPU/GPU StatRow layout; keep RAM-only overlap fix via `RamStatRow`.
+
 **0.5.5-14** — Fix settings toggles (`toggleHandler` vs reserved `onToggle`), StatRow RAM/detail bar overlap, uptime label "Uptime".
 
 **0.5.5-13** — Fix process-table header Repeater `index` ReferenceError in Panel.qml.
