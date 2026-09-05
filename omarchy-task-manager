@@ -31,7 +31,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.5-5"
+APP_VERSION = "0.5.5-6"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -748,6 +748,36 @@ def read_gpu_temp() -> float | None:
 
 
 # ──────────────────────────────────────────────
+# Memory stats  (/proc/meminfo)
+# ──────────────────────────────────────────────
+
+def read_mem_usage() -> tuple[int, int, float] | None:
+    """MemTotal and MemAvailable (kB) → (used_kib, total_kib, pct), or None."""
+    total_kib: int | None = None
+    avail_kib: int | None = None
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    total_kib = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    avail_kib = int(line.split()[1])
+    except (OSError, ValueError):
+        return None
+    if total_kib is None or avail_kib is None or total_kib <= 0:
+        return None
+    used_kib = max(0, total_kib - avail_kib)
+    pct = max(0.0, min(100.0, 100.0 * used_kib / total_kib))
+    return used_kib, total_kib, pct
+
+
+def fmt_mem_gib_pair(used_kib: int, total_kib: int) -> str:
+    """Format used/total as GiB, e.g. '4.2 / 16.0 GiB'."""
+    gib = 1024 * 1024
+    return f"{used_kib / gib:.1f} / {total_kib / gib:.1f} GiB"
+
+
+# ──────────────────────────────────────────────
 # Fan helpers
 # ──────────────────────────────────────────────
 
@@ -1183,6 +1213,24 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._gpu_row.append(self.gpu_bar)
         self._gpu_row.append(self.gpu_temp_label)
 
+        # RAM row — usage % and bar on left, used/total on right (mirrors CPU/GPU)
+        ram_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        ram_key = Gtk.Label(label="RAM", xalign=0)
+        ram_key.set_width_chars(4)
+        _add_css_class(ram_key, "dim")
+        self.ram_value = Gtk.Label(label="0%", xalign=0)
+        self.ram_value.set_width_chars(5)
+        _add_css_class(self.ram_value, "stat-value")
+        self.ram_bar = Gtk.ProgressBar()
+        self.ram_bar.set_hexpand(True)
+        self.ram_bar.set_valign(Gtk.Align.CENTER)
+        self.ram_detail_label = Gtk.Label(label=EM_DASH, xalign=0)
+        _add_css_class(self.ram_detail_label, "stat-value")
+        ram_row.append(ram_key)
+        ram_row.append(self.ram_value)
+        ram_row.append(self.ram_bar)
+        ram_row.append(self.ram_detail_label)
+
         # Per-core FlowBox
         self.core_flow = Gtk.FlowBox()
         self.core_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -1255,6 +1303,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
 
         stats.append(cpu_row)
         stats.append(self._gpu_row)
+        stats.append(ram_row)
         stats.append(self.core_flow)
         stats.append(meta)
         stats.append(profile_row)
@@ -1794,6 +1843,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             overall, cores = read_proc_stat()
             self._refresh_cpu(overall, cores)
             self._refresh_gpu()
+            self._refresh_ram()
             self._refresh_temp()
             self._refresh_procs(overall, cores)
             self._schedule_fan()
@@ -1834,6 +1884,18 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self.gpu_temp_label.set_text(
             EM_DASH if temp is None else f"{temp:.0f}\u00b0C"
         )
+
+    def _refresh_ram(self) -> None:
+        mem = read_mem_usage()
+        if mem is None:
+            self.ram_value.set_text(EM_DASH)
+            self.ram_bar.set_fraction(0.0)
+            self.ram_detail_label.set_text(EM_DASH)
+            return
+        used_kib, total_kib, pct = mem
+        self.ram_value.set_text(f"{pct:.0f}%")
+        self.ram_bar.set_fraction(pct / 100.0)
+        self.ram_detail_label.set_text(fmt_mem_gib_pair(used_kib, total_kib))
 
     def _refresh_temp(self) -> None:
         temp = read_cpu_temp()
