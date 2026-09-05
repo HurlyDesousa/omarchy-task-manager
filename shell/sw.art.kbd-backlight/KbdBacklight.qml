@@ -240,9 +240,9 @@ Panel {
                 spacing: 0
                 width: parent.width
 
-                // ── Header row: title + gear ──────────────────────────────
+                // ── Header row: title + Enabled toggle + gear ─────────────
                 RowLayout {
-                    spacing: 0
+                    spacing: 8
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     Layout.leftMargin: 14
@@ -255,6 +255,21 @@ Panel {
                         font.bold: true
                         color: "#cdd6f4"
                         Layout.fillWidth: true
+                    }
+
+                    SettingToggle {
+                        compact: true
+                        labelText: "Enabled"
+                        checked: root.kbdEnabled && root.brightness > 0
+                        toggleHandler: function(v) {
+                            if (v) {
+                                root.kbdEnabled = true
+                                if (root.brightness === 0) root.brightness = 100
+                            } else {
+                                root.kbdEnabled = false
+                            }
+                            root.applyAndSave()
+                        }
                     }
 
                     // Settings gear button — matches Omarchy themed treatment.
@@ -377,21 +392,6 @@ Panel {
                             Layout.minimumWidth: 36
                         }
                     }
-
-                    // ── Enabled toggle ────────────────────────────────────
-                    SettingToggle {
-                        labelText: "Enabled"
-                        checked: root.kbdEnabled && root.brightness > 0
-                        toggleHandler: function(v) {
-                            if (v) {
-                                root.kbdEnabled = true
-                                if (root.brightness === 0) root.brightness = 100
-                            } else {
-                                root.kbdEnabled = false
-                            }
-                            root.applyAndSave()
-                        }
-                    }
                 }
 
                 // ── Settings panel (shown when showSettings is true) ───────
@@ -491,17 +491,18 @@ Panel {
         property string detailText: ""
         property bool checked
         property var toggleHandler
-        Layout.fillWidth: true
-        spacing: 8
+        property bool compact: false
+        Layout.fillWidth: !compact
+        spacing: compact ? 6 : 8
 
         ColumnLayout {
-            Layout.fillWidth: true
+            Layout.fillWidth: !compact
             spacing: 2
 
             Label {
                 text: labelText
                 color: "#cdd6f4"
-                font.pixelSize: 12
+                font.pixelSize: compact ? 11 : 12
             }
             Label {
                 visible: detailText !== ""
