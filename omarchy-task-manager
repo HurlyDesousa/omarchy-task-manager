@@ -1500,7 +1500,18 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         return False
 
     def _hide_to_special(self) -> None:
-        """Move this window to special:taskmanager — same path as omarchy-task-manager-toggle."""
+        """Hide the Task Manager window.
+
+        Two cases:
+        - Window is on a regular workspace (first launch, or moved back by Hyprland):
+          move it to special:taskmanager with follow=false so the special workspace
+          is NOT shown — identical to omarchy-task-manager-toggle's hide path.
+        - Window is already in special:taskmanager but the workspace overlay is
+          currently visible (shown via bar icon → toggle_special): call
+          toggle_special to collapse the overlay.  We confirm visibility first
+          via hyprctl monitors to avoid accidentally *showing* the overlay when
+          it is already hidden (e.g. after the toggle script's own window.move).
+        """
         try:
             out = subprocess.run(
                 ["hyprctl", "clients", "-j"],
@@ -1512,27 +1523,61 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             clients = json.loads(out.stdout)
         except Exception:
             return
-        addr = None
+        addr = ""
+        ws_name = ""
         for c in clients:
             if c.get("class") == APP_ID:
                 ws_name = c.get("workspace", {}).get("name", "")
-                if not ws_name.startswith("special:"):
-                    addr = c.get("address")
-                    break
+                addr = c.get("address", "")
+                break
         if not addr:
             return
-        try:
-            subprocess.run(
-                [
-                    "hyprctl", "eval",
-                    f'hl.dispatch(hl.dsp.window.move({{ workspace = "special:taskmanager",'
-                    f' follow = false, window = "address:{addr}" }})',
-                ],
-                capture_output=True, timeout=2.0, check=False,
-                stdin=subprocess.DEVNULL,
+        if ws_name.startswith("special:"):
+            # Already in the special workspace. Only call toggle_special when
+            # the overlay is actually visible; if it is already hidden there is
+            # nothing to do (and calling toggle_special would wrongly show it).
+            try:
+                mon = subprocess.run(
+                    ["hyprctl", "monitors", "-j"],
+                    capture_output=True, text=True, timeout=2.0, check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+                if mon.returncode != 0 or not mon.stdout.strip():
+                    return
+                monitors = json.loads(mon.stdout)
+            except Exception:
+                return
+            visible = any(
+                m.get("specialWorkspace", {}).get("name") == "special:taskmanager"
+                for m in monitors
             )
-        except Exception:
-            pass
+            if not visible:
+                return
+            try:
+                subprocess.run(
+                    [
+                        "hyprctl", "eval",
+                        'hl.dispatch(hl.dsp.workspace.toggle_special("taskmanager"))',
+                    ],
+                    capture_output=True, timeout=2.0, check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+        else:
+            # On a regular workspace: move silently to special:taskmanager.
+            try:
+                subprocess.run(
+                    [
+                        "hyprctl", "eval",
+                        f'hl.dispatch(hl.dsp.window.move({{ workspace = "special:taskmanager",'
+                        f' follow = false, window = "address:{addr}" }})',
+                    ],
+                    capture_output=True, timeout=2.0, check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
 
     # ── Expand / collapse ─────────────────────────
 
