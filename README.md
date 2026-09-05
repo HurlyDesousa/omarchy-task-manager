@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-30** — Keyboard RGB popover: Omarchy theme restyle (Style/Color tokens, Task Manager panel pattern); labelless header toggle preserved (0.5.5-30 pkgrel; AI usage bars / `ai-usage*` CLI / AI tray preserved).
+
 **0.5.5-29** — AI usage: sanitize legacy Codex strings to Grok Bot in panel JSON/status/auth help when reading `codex.json` (0.5.5-29 pkgrel; `ai-usage` / AI tray preserved).
 
 **0.5.5-28** — AI usage panel redesign: Cursor Models + Other Models quota bars, Grok Bot weekly meter, Grok build bar; rename Codex → Grok Bot with backward-compat `codex.json` reads (0.5.5-28 pkgrel; `ai-usage` / AI tray preserved).
