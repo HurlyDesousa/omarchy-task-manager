@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.ai-usage",
   "name": "AI Usage",
-  "version": "0.5.5-26",
+  "version": "0.5.5-27",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Aggregated token-usage panel for Cursor, Codex, and Grok subscription agents",

@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-27** — Keyboard backlight: header toggle is switch-only (no "Enabled" label); widen RGB popover so color presets and hex row are not clipped (0.5.5-27 pkgrel; `ai-usage` / AI tray preserved).
+
 **0.5.5-26** — Keyboard backlight: move **Enabled** toggle to top-right of RGB popover header (0.5.5-26 pkgrel; `ai-usage` / AI tray preserved).
 
 **0.5.5-25** — Permanent mainline land: AI tray plugins + `ai-usage` / `ai-usage-update` CLI on shared backend (do not drop on future pkgrel bumps).
