@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omarchy Task Manager — GTK4 CPU/GPU, thermal, fan curves, settings."""
+"""Omarchy Task Manager — GTK4 CPU/GPU, thermal, fan monitoring, settings."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 try:
@@ -31,7 +30,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.5-7"
+APP_VERSION = "0.5.5-10"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -44,11 +43,12 @@ FALLBACK_BG = "#1a1a1a"
 FALLBACK_FG = "#c8c8c8"
 FAN_BIN_PRIMARY = "/usr/local/bin/x1e-ec-tool"
 FAN_TIMEOUT = 2.0
+# Reference ceiling for fan meter % (Full Send max on X Elite; read-only display).
+FAN_RPM_MAX = 8000
 
 THEME_DIR = Path.home() / ".local" / "state" / "omarchy" / "current" / "theme"
 
 STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "task-manager"
-PROFILE_STATE = STATE_DIR / "fan-profile"
 PREFS_FILE = STATE_DIR / "prefs.json"
 
 # Hyprland autostart integration
@@ -61,44 +61,11 @@ AUTOSTART_BLOCK_END = "-- omarchy-task-manager end"
 GPU_DEVFREQ = Path("/sys/class/devfreq/3d00000.gpu")
 _GPU_THERMAL_RE = re.compile(r"^gpuss_\d+_thermal$")
 
-# Fan profiles: (label, mode, rpm_or_None)
-# Balanced = mode auto only when curves are OFF — ec-service temp-loop owns RPM.
-# Others = mode manual + set-speed <rpm> (one-shot when curves are OFF).
-# When fan_curves is ON, Saver / Balanced / Performance drive RPM from
-# CPU temp continuously; Full Send stays mode manual + 8000 RPM (one-shot).
-# Never calls `profile`, `profile get`, or `get-profile`.
-FAN_PROFILES: list[tuple[str, str, int | None]] = [
-    ("Power Saver", "manual", 1800),
-    ("Balanced",    "auto",   None),
-    ("Performance", "manual", 4500),
-    ("Full Send",   "manual", 8000),
-]
-
-# Old label → new label for persisted-profile migration.
-_PROFILE_RENAME: dict[str, str] = {
-    "Battery saver": "Power Saver",
-    "Saver":         "Power Saver",
-    "Balance":       "Balanced",
-    "Full speed":    "Full Send",
-}
-
-# Curve anchors: (temp_celsius, target_rpm) — interpolated linearly.
-# Applied when fan_curves pref is True and profile is in this dict.
-FAN_CURVES: dict[str, list[tuple[float, int]]] = {
-    "Power Saver": [(40, 1500), (55, 1800), (70, 2500), (85, 3500)],
-    "Balanced":    [(40, 1800), (55, 2800), (70, 4500), (85, 6000)],
-    "Performance": [(40, 2500), (55, 4000), (70, 6000), (85, 8000)],
-}
-FAN_CURVE_INTERVAL = 2.0        # seconds between curve loop iterations
-FAN_CURVE_RPM_THRESHOLD = 200   # min RPM delta before sending set-speed
-FAN_CURVE_FORCE_INTERVAL = 5.0  # force a set-speed resend after this many seconds
-
 DEFAULT_PREFS: dict = {
     "start_compact": False,
     "remember_expand": True,
     "refresh_ms": 1000,
     "last_compact": True,   # compact on first run (matches v2 behaviour)
-    "fan_curves": True,     # temp-driven fan curves for Battery saver/Balance/Performance
     "start_hidden": True,   # move to special:taskmanager on launch; bar icon shows/hides it
 }
 
@@ -226,25 +193,6 @@ def _set_autostart(enabled: bool) -> str:
         return str(exc)
 
 
-def _load_saved_profile() -> str | None:
-    try:
-        v = PROFILE_STATE.read_text(encoding="utf-8").strip()
-        v = _PROFILE_RENAME.get(v, v)   # migrate old label names
-        if any(v == label for label, _, _ in FAN_PROFILES):
-            return v
-    except Exception:
-        pass
-    return None
-
-
-def _save_profile(name: str) -> None:
-    try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        PROFILE_STATE.write_text(name + "\n", encoding="utf-8")
-    except Exception:
-        pass
-
-
 # ──────────────────────────────────────────────
 # Theme
 # ──────────────────────────────────────────────
@@ -370,13 +318,10 @@ label.dim {{
 label.stat-value {{
   font-weight: 600;
 }}
-label.fan-status {{
+label.fan-meter-val {{
   font-size: 11px;
-  opacity: 0.85;
-}}
-label.fan-status.err {{
-  color: #e06c75;
-  opacity: 1.0;
+  opacity: 0.92;
+  min-width: 72px;
 }}
 label.section-hdr {{
   font-weight: 600;
@@ -399,6 +344,14 @@ progressbar > trough > progress {{
 progressbar.cpu-core > trough {{
   min-height: 8px;
   min-width: 44px;
+}}
+progressbar.fan-meter > trough {{
+  min-height: 8px;
+  min-width: 36px;
+}}
+progressbar.fan-meter > trough > progress {{
+  min-height: 8px;
+  transition: all 400ms ease-out;
 }}
 entry {{
   background-color: alpha({fg}, 0.08);
@@ -426,15 +379,6 @@ button:hover {{
 }}
 button:disabled {{
   opacity: 0.45;
-}}
-button.profile-active {{
-  background-color: {accent};
-  color: {bg};
-  border-color: {accent};
-}}
-button.profile-active:hover {{
-  background-color: {accent};
-  color: {bg};
 }}
 button.expand-toggle {{
   min-height: 24px;
@@ -900,65 +844,17 @@ def read_fan_speeds() -> tuple[int | None, int | None]:
     return _hwmon_fan_speeds()
 
 
-def fmt_rpm(rpm: int | None) -> str:
-    return EM_DASH if rpm is None else f"{rpm} RPM"
+def fan_meter_fraction(rpm: int | None) -> float:
+    if rpm is None or rpm <= 0:
+        return 0.0
+    return max(0.0, min(1.0, rpm / FAN_RPM_MAX))
 
 
-def apply_fan_profile_sync(profile_name: str) -> str:
-    """Apply a fan profile. Run in a worker thread; returns a status string.
-
-    Battery saver / Performance / Full speed: mode manual + set-speed <rpm>.
-    Balance: mode auto only (ec-service temp-loop owns RPM; no set-speed).
-    Never calls `profile`, `profile get`, or `get-profile`.
-    Does not stop x1e-ec-tool.service.
-    """
-    entry = next((p for p in FAN_PROFILES if p[0] == profile_name), None)
-    if entry is None:
-        return f"\u26a0 Unknown profile: {profile_name}"
-
-    _, mode, rpm = entry
-    exe = _fan_executable()
-    if exe is None:
-        return "\u26a0 x1e-ec-tool not found"
-
-    out = _fan_exec(exe, ["mode", mode])
-    if out is None:
-        return f"\u26a0 Failed: mode {mode}"
-
-    if rpm is not None:
-        out = _fan_exec(exe, ["set-speed", str(rpm)])
-        if out is None:
-            return f"\u26a0 Failed: set-speed {rpm}"
-
-    # Verify: show actual RPM from get-speed (may still be ramping up)
-    speed_out = _fan_exec(exe, ["get-speed"])
-    parsed = _parse_fan_text(speed_out)
-    if parsed is not None:
-        left, right = parsed
-        parts: list[str] = []
-        if left is not None:
-            parts.append(f"L {left} RPM")
-        if right is not None:
-            parts.append(f"R {right} RPM")
-        if parts:
-            return f"{profile_name}: {', '.join(parts)}"
-
-    return f"{profile_name} applied"
-
-
-def _interpolate_rpm(curve: list[tuple[float, int]], temp: float) -> int:
-    """Linearly interpolate RPM from (temp, rpm) anchor points."""
-    if temp <= curve[0][0]:
-        return curve[0][1]
-    if temp >= curve[-1][0]:
-        return curve[-1][1]
-    for i in range(len(curve) - 1):
-        t0, r0 = curve[i]
-        t1, r1 = curve[i + 1]
-        if t0 <= temp <= t1:
-            frac = (temp - t0) / (t1 - t0)
-            return int(r0 + frac * (r1 - r0))
-    return curve[-1][1]
+def fmt_fan_meter(rpm: int | None) -> str:
+    if rpm is None:
+        return EM_DASH
+    pct = fan_meter_fraction(rpm) * 100.0
+    return f"{rpm} {pct:.0f}%"
 
 
 # ──────────────────────────────────────────────
@@ -1167,16 +1063,8 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self._row_iters: dict[int, Gtk.TreeIter] = {}
         self._filter_text = ""
 
-        # Fan state
+        # Fan monitoring state
         self._fan_busy = False
-        self._profile_busy = False
-        self._active_profile: str | None = _load_saved_profile()
-        self._profile_buttons: dict[str, Gtk.Button] = {}
-        self._profile_status_id = 0
-
-        # Fan curve loop state
-        self._curve_stop_event: threading.Event | None = None
-        self._curve_thread: threading.Thread | None = None
 
         # Window state
         self._expanded = False
@@ -1270,26 +1158,31 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self.core_flow.set_column_spacing(6)
         self.core_flow.set_row_spacing(4)
 
-        # Meta: fan speeds only — CPU temp has moved to the CPU row (right side)
-        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        # Meta: dual fan meters + uptime — compact-friendly
+        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        meta.set_hexpand(True)
 
-        fan_l_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        fan_l_key = Gtk.Label(label="Fan L", xalign=0)
-        _add_css_class(fan_l_key, "dim")
-        self.fan_left = Gtk.Label(label=EM_DASH, xalign=0)
-        _add_css_class(self.fan_left, "stat-value")
-        fan_l_box.append(fan_l_key)
-        fan_l_box.append(self.fan_left)
+        def _fan_meter(side: str) -> tuple[Gtk.Box, Gtk.ProgressBar, Gtk.Label]:
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            box.set_hexpand(True)
+            key = Gtk.Label(label=side, xalign=0)
+            key.set_width_chars(1)
+            _add_css_class(key, "dim")
+            bar = Gtk.ProgressBar()
+            _add_css_class(bar, "fan-meter")
+            bar.set_valign(Gtk.Align.CENTER)
+            bar.set_hexpand(True)
+            val = Gtk.Label(label=EM_DASH, xalign=0)
+            _add_css_class(val, "fan-meter-val")
+            box.append(key)
+            box.append(bar)
+            box.append(val)
+            return box, bar, val
 
-        fan_r_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        fan_r_key = Gtk.Label(label="Fan R", xalign=0)
-        _add_css_class(fan_r_key, "dim")
-        self.fan_right = Gtk.Label(label=EM_DASH, xalign=0)
-        _add_css_class(self.fan_right, "stat-value")
-        fan_r_box.append(fan_r_key)
-        fan_r_box.append(self.fan_right)
+        fan_l_wrap, self.fan_left_bar, self.fan_left_val = _fan_meter("L")
+        fan_r_wrap, self.fan_right_bar, self.fan_right_val = _fan_meter("R")
 
-        uptime_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        uptime_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         uptime_key = Gtk.Label(label="Up", xalign=0)
         _add_css_class(uptime_key, "dim")
         self.uptime_label = Gtk.Label(label=EM_DASH, xalign=0)
@@ -1297,23 +1190,9 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         uptime_box.append(uptime_key)
         uptime_box.append(self.uptime_label)
 
-        meta.append(fan_l_box)
-        meta.append(fan_r_box)
+        meta.append(fan_l_wrap)
+        meta.append(fan_r_wrap)
         meta.append(uptime_box)
-
-        # Fan profile buttons
-        profile_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        profile_row.set_homogeneous(True)
-        for label, _mode, _rpm in FAN_PROFILES:
-            btn = Gtk.Button(label=label)
-            btn.set_hexpand(True)
-            btn.connect("clicked", self._on_profile_clicked, label)
-            self._profile_buttons[label] = btn
-            profile_row.append(btn)
-        self._update_profile_highlight()
-
-        self.profile_status = Gtk.Label(label="", xalign=0, wrap=True)
-        _add_css_class(self.profile_status, "fan-status")
 
         # Processes header: toggle | search (hexpand) | gear
         proc_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1345,8 +1224,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         stats.append(ram_row)
         stats.append(self.core_flow)
         stats.append(meta)
-        stats.append(profile_row)
-        stats.append(self.profile_status)
         stats.append(proc_hdr)
 
         # Process box — appended on expand, removed on collapse
@@ -1481,17 +1358,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         except AttributeError:
             pass  # GTK < 4.6; interval stays at startup value
 
-        # Fan
-        box.append(section("Fan"))
-        self._p_fan_curves = Gtk.CheckButton(label="Temp-driven fan curves")
-        self._p_fan_curves.set_tooltip_text(
-            "Power Saver / Balanced / Performance: map CPU temp → RPM continuously.\n"
-            "Full Send always runs at max speed."
-        )
-        self._p_fan_curves.set_active(self._prefs.get("fan_curves", True))
-        self._p_fan_curves.connect("toggled", self._on_p_fan_curves)
-        box.append(self._p_fan_curves)
-
         version_lbl = Gtk.Label(label=f"Version {APP_VERSION}", xalign=0)
         _add_css_class(version_lbl, "dim")
         box.append(version_lbl)
@@ -1518,13 +1384,6 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             w, h = expanded_monitor_size()
             self.set_default_size(w, h)
 
-        # Resume curve loop for last-used profile if pref is on
-        if (
-            self._prefs.get("fan_curves", True)
-            and self._active_profile in FAN_CURVES
-        ):
-            self._start_fan_curve_loop(self._active_profile)
-
     def _on_map(self, *_args) -> None:
         try:
             self.unmaximize()
@@ -1545,13 +1404,9 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         if self._tick_id:
             GLib.source_remove(self._tick_id)
             self._tick_id = 0
-        if self._profile_status_id:
-            GLib.source_remove(self._profile_status_id)
-            self._profile_status_id = 0
         if self._focus_out_id:
             GLib.source_remove(self._focus_out_id)
             self._focus_out_id = 0
-        self._stop_fan_curve_loop()
         if self._prefs.get("remember_expand", True):
             self._prefs["last_compact"] = not self._expanded
             save_prefs(self._prefs)
@@ -1713,167 +1568,10 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         want = btn.get_active()
         err = _set_autostart(want)
         if err:
-            # Revert the toggle and surface the error in the fan status label
             btn.handler_block_by_func(self._on_p_autostart)
             btn.set_active(not want)
             btn.handler_unblock_by_func(self._on_p_autostart)
-            self._show_profile_status(f"Autostart: {err}", error=True)
-
-    def _on_p_fan_curves(self, btn: Gtk.CheckButton) -> None:
-        enabled = btn.get_active()
-        self._prefs["fan_curves"] = enabled
-        save_prefs(self._prefs)
-        if enabled:
-            # Start the curve loop for the active profile if it has a curve
-            if self._active_profile and self._active_profile in FAN_CURVES:
-                self._start_fan_curve_loop(self._active_profile)
-        else:
-            # Stop the curve loop; fans stay at last curve-set RPM
-            self._stop_fan_curve_loop()
-
-    # ── Fan curve loop ────────────────────────────
-
-    def _start_fan_curve_loop(self, profile_name: str) -> None:
-        """Start the background curve loop for profile_name (must be in FAN_CURVES)."""
-        self._stop_fan_curve_loop()
-        stop = threading.Event()
-        self._curve_stop_event = stop
-        curve = FAN_CURVES[profile_name]
-        t = threading.Thread(
-            target=self._fan_curve_worker,
-            args=(curve, stop),
-            name="fan-curve",
-            daemon=True,
-        )
-        self._curve_thread = t
-        t.start()
-
-    def _stop_fan_curve_loop(self) -> None:
-        """Signal the curve loop to exit (non-blocking)."""
-        ev = self._curve_stop_event
-        if ev is not None:
-            ev.set()
-        self._curve_stop_event = None
-        self._curve_thread = None
-
-    def _fan_curve_worker(
-        self, curve: list[tuple[float, int]], stop: threading.Event
-    ) -> None:
-        """Daemon thread: drive fans from CPU temp using curve anchors.
-
-        Sets mode manual once on entry, then on each iteration reads CPU temp,
-        interpolates target RPM, and calls set-speed only when RPM changes by
-        more than FAN_CURVE_RPM_THRESHOLD or FAN_CURVE_FORCE_INTERVAL seconds
-        have elapsed — to avoid spamming the EC.
-        """
-        exe = _fan_executable()
-        if exe and not stop.is_set():
-            _fan_exec(exe, ["mode", "manual"])
-
-        last_rpm: int = -1
-        last_set_time: float = 0.0
-
-        while not stop.wait(FAN_CURVE_INTERVAL):
-            if stop.is_set():
-                break
-            temp = read_cpu_temp()
-            if temp is None:
-                continue
-            target_rpm = _interpolate_rpm(curve, temp)
-            now = time.monotonic()
-            rpm_delta = abs(target_rpm - last_rpm)
-            time_elapsed = now - last_set_time
-            if rpm_delta > FAN_CURVE_RPM_THRESHOLD or time_elapsed >= FAN_CURVE_FORCE_INTERVAL:
-                exe = _fan_executable()
-                if exe:
-                    _fan_exec(exe, ["set-speed", str(target_rpm)])
-                last_rpm = target_rpm
-                last_set_time = now
-
-    # ── Fan profiles ──────────────────────────────
-
-    def _update_profile_highlight(self) -> None:
-        for label, btn in self._profile_buttons.items():
-            if label == self._active_profile:
-                _add_css_class(btn, "profile-active")
-            else:
-                _remove_css_class(btn, "profile-active")
-
-    def _show_profile_status(self, message: str, *, error: bool = False) -> None:
-        self.profile_status.set_text(message)
-        if error:
-            _add_css_class(self.profile_status, "err")
-        else:
-            _remove_css_class(self.profile_status, "err")
-        if self._profile_status_id:
-            GLib.source_remove(self._profile_status_id)
-            self._profile_status_id = 0
-        if message:
-            self._profile_status_id = GLib.timeout_add(
-                5000, self._clear_profile_status
-            )
-
-    def _clear_profile_status(self) -> bool:
-        self.profile_status.set_text("")
-        _remove_css_class(self.profile_status, "err")
-        self._profile_status_id = 0
-        return False
-
-    def _on_profile_clicked(self, _btn: Gtk.Button, profile_name: str) -> None:
-        if self._profile_busy:
-            return
-        self._profile_busy = True
-        self._stop_fan_curve_loop()
-        for btn in self._profile_buttons.values():
-            btn.set_sensitive(False)
-        self._show_profile_status(f"Applying {profile_name}\u2026")
-
-        curves_on = self._prefs.get("fan_curves", True)
-        use_curve = curves_on and profile_name in FAN_CURVES
-
-        if use_curve:
-            def worker() -> None:
-                # Set mode manual then let the curve loop own RPM
-                exe = _fan_executable()
-                msg = "\u26a0 x1e-ec-tool not found"
-                if exe:
-                    out = _fan_exec(exe, ["mode", "manual"])
-                    msg = f"{profile_name}: curve active" if out is not None else "\u26a0 Failed: mode manual"
-                GLib.idle_add(self._profile_done_curve, profile_name, msg)
-        else:
-            def worker() -> None:
-                result = apply_fan_profile_sync(profile_name)
-                GLib.idle_add(self._profile_done, profile_name, result)
-
-        threading.Thread(target=worker, name="fan-profile", daemon=True).start()
-
-    def _profile_done_curve(self, profile_name: str, status: str) -> None:
-        """Called on the main thread when the curve-mode profile apply finishes."""
-        self._profile_busy = False
-        for btn in self._profile_buttons.values():
-            btn.set_sensitive(True)
-        is_error = status.startswith("\u26a0") or "Failed" in status
-        if not is_error:
-            self._active_profile = profile_name
-            _save_profile(profile_name)
-            self._start_fan_curve_loop(profile_name)
-        self._update_profile_highlight()
-        self._show_profile_status(status, error=is_error)
-
-    def _profile_done(self, profile_name: str, status: str) -> None:
-        self._profile_busy = False
-        for btn in self._profile_buttons.values():
-            btn.set_sensitive(True)
-        is_error = (
-            status.startswith("\u26a0")
-            or "Failed" in status
-            or "not found" in status
-        )
-        if not is_error:
-            self._active_profile = profile_name
-            _save_profile(profile_name)
-        self._update_profile_highlight()
-        self._show_profile_status(status, error=is_error)
+            self._alert("Autostart failed", err)
 
     # ── Main tick ─────────────────────────────────
 
@@ -1978,8 +1676,10 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
 
     def _apply_fan(self, left: int | None, right: int | None) -> bool:
         try:
-            self.fan_left.set_text(fmt_rpm(left))
-            self.fan_right.set_text(fmt_rpm(right))
+            self.fan_left_bar.set_fraction(fan_meter_fraction(left))
+            self.fan_left_val.set_text(fmt_fan_meter(left))
+            self.fan_right_bar.set_fraction(fan_meter_fraction(right))
+            self.fan_right_val.set_text(fmt_fan_meter(right))
         except Exception:
             pass
         self._fan_busy = False

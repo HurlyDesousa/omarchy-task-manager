@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Task Manager
-Comment=CPU, temperature, fans, and processes for Omarchy
+Comment=CPU, temperature, fan monitoring, and processes for Omarchy
 Exec=omarchy-task-manager
 Icon=utilities-system-monitor
 Terminal=false
