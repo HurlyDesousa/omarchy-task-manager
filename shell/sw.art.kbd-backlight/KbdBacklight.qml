@@ -378,46 +378,18 @@ Panel {
                         }
                     }
 
-                    // ── On / off toggle ───────────────────────────────────
-                    RowLayout {
-                        spacing: 8
-                        Layout.fillWidth: true
-
-                        Label {
-                            text: (root.kbdEnabled && root.brightness > 0) ? "On" : "Off"
-                            color: "#a6adc8"
-                            font.pixelSize: 12
-                            Layout.fillWidth: true
-                        }
-
-                        Rectangle {
-                            width: 46; height: 24; radius: 12
-                            color: (root.kbdEnabled && root.brightness > 0) ? "#89b4fa" : "#45475a"
-
-                            Behavior on color { ColorAnimation { duration: 120 } }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    var isOn = root.kbdEnabled && root.brightness > 0
-                                    if (isOn) {
-                                        root.kbdEnabled = false
-                                    } else {
-                                        root.kbdEnabled = true
-                                        if (root.brightness === 0) root.brightness = 100
-                                    }
-                                    root.applyAndSave()
-                                }
+                    // ── Enabled toggle ────────────────────────────────────
+                    SettingToggle {
+                        labelText: "Enabled"
+                        checked: root.kbdEnabled && root.brightness > 0
+                        toggleHandler: function(v) {
+                            if (v) {
+                                root.kbdEnabled = true
+                                if (root.brightness === 0) root.brightness = 100
+                            } else {
+                                root.kbdEnabled = false
                             }
-
-                            Rectangle {
-                                width: 18; height: 18; radius: 9
-                                color: "#1e1e2e"
-                                anchors.verticalCenter: parent.verticalCenter
-                                x: (root.kbdEnabled && root.brightness > 0) ? 25 : 3
-                                Behavior on x { NumberAnimation { duration: 120 } }
-                            }
+                            root.applyAndSave()
                         }
                     }
                 }
@@ -487,99 +459,76 @@ Panel {
 
                     // ── Autostart toggle ──────────────────────────────────
                     // When on: restore last color/brightness/enabled on session/bar start.
-                    RowLayout {
-                        spacing: 8
-                        Layout.fillWidth: true
-
-                        ColumnLayout {
-                            spacing: 2
-                            Layout.fillWidth: true
-
-                            Label {
-                                text: "Autostart"
-                                color: "#cdd6f4"
-                                font.pixelSize: 12
-                            }
-                            Label {
-                                text: "Restore on session / bar start"
-                                color: "#6c7086"
-                                font.pixelSize: 10
-                            }
-                        }
-
-                        Rectangle {
-                            width: 46; height: 24; radius: 12
-                            color: root.autostart ? "#89b4fa" : "#45475a"
-
-                            Behavior on color { ColorAnimation { duration: 120 } }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    root.autostart = !root.autostart
-                                    saveTimer.restart()
-                                }
-                            }
-
-                            Rectangle {
-                                width: 18; height: 18; radius: 9
-                                color: "#1e1e2e"
-                                anchors.verticalCenter: parent.verticalCenter
-                                x: root.autostart ? 25 : 3
-                                Behavior on x { NumberAnimation { duration: 120 } }
-                            }
+                    SettingToggle {
+                        labelText: "Autostart"
+                        detailText: "Restore on session / bar start"
+                        checked: root.autostart
+                        toggleHandler: function(v) {
+                            root.autostart = v
+                            saveTimer.restart()
                         }
                     }
 
                     // ── Auto-off toggle ───────────────────────────────────
                     // When on: IdleMonitor sends kb #000000 on 3-min idle.
                     // Screen dim runs regardless — this flag is keyboard-only.
-                    RowLayout {
-                        spacing: 8
-                        Layout.fillWidth: true
-
-                        ColumnLayout {
-                            spacing: 2
-                            Layout.fillWidth: true
-
-                            Label {
-                                text: "Auto-off on idle"
-                                color: "#cdd6f4"
-                                font.pixelSize: 12
-                            }
-                            Label {
-                                text: "Turn off keyboard (not screen) on 3 min idle"
-                                color: "#6c7086"
-                                font.pixelSize: 10
-                            }
-                        }
-
-                        Rectangle {
-                            width: 46; height: 24; radius: 12
-                            color: root.autoOff ? "#89b4fa" : "#45475a"
-
-                            Behavior on color { ColorAnimation { duration: 120 } }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    root.autoOff = !root.autoOff
-                                    saveTimer.restart()
-                                }
-                            }
-
-                            Rectangle {
-                                width: 18; height: 18; radius: 9
-                                color: "#1e1e2e"
-                                anchors.verticalCenter: parent.verticalCenter
-                                x: root.autoOff ? 25 : 3
-                                Behavior on x { NumberAnimation { duration: 120 } }
-                            }
+                    SettingToggle {
+                        labelText: "Auto-off on idle"
+                        detailText: "Turn off keyboard (not screen) on 3 min idle"
+                        checked: root.autoOff
+                        toggleHandler: function(v) {
+                            root.autoOff = v
+                            saveTimer.restart()
                         }
                     }
                 }
+            }
+        }
+    }
+
+    component SettingToggle: RowLayout {
+        property string labelText
+        property string detailText: ""
+        property bool checked
+        property var toggleHandler
+        Layout.fillWidth: true
+        spacing: 8
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 2
+
+            Label {
+                text: labelText
+                color: "#cdd6f4"
+                font.pixelSize: 12
+            }
+            Label {
+                visible: detailText !== ""
+                text: detailText
+                color: "#6c7086"
+                font.pixelSize: 10
+            }
+        }
+
+        Rectangle {
+            width: 46; height: 24; radius: 12
+            color: checked ? "#89b4fa" : "#45475a"
+
+            Behavior on color { ColorAnimation { duration: 120 } }
+
+            Rectangle {
+                width: 18; height: 18; radius: 9
+                color: "#1e1e2e"
+                anchors.verticalCenter: parent.verticalCenter
+                x: checked ? parent.width - width - 3 : 3
+                Behavior on x { NumberAnimation { duration: 120 } }
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (toggleHandler) toggleHandler(!checked)
             }
         }
     }

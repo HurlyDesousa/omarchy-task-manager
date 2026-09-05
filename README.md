@@ -94,6 +94,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-24** — Keyboard backlight panel: replace clipped On/Off text with Enabled toggle switch (Task Manager SettingToggle pattern).
+
 **0.5.5-22** — Rename monitor fan meter labels from L/R to Fan L / Fan R.
 
 **0.5.5-20** — Show CPU/GPU/RAM and process CPU percentages as whole numbers (no decimals).
