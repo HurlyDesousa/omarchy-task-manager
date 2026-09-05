@@ -1,7 +1,7 @@
 # Maintainer: Toby Swart <toby@s-w.art>
 pkgname=omarchy-task-manager
 pkgver=0.5.5
-pkgrel=18
+pkgrel=20
 pkgdesc='Omarchy Task Manager Quickshell KeyboardPanel with stats backend'
 arch=('any')
 url='https://github.com/HurlyDesousa/omarchy-task-manager'

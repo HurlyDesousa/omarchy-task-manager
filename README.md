@@ -94,6 +94,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-20** — Show CPU/GPU/RAM and process CPU percentages as whole numbers (no decimals).
+
 **0.5.5-18** — Align CPU/GPU/RAM percent column: shared 44px right-aligned value width on StatRow and RamStatRow.
 
 **0.5.5-16** — Settings view: right-align Start compact / Remember last state switches (labels left, toggles in a column on the right).
