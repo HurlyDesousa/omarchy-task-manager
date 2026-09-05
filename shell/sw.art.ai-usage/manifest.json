@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "sw.art.ai-usage",
   "name": "AI Usage",
-  "version": "0.5.5-27",
+  "version": "0.5.5-28",
   "author": "Toby Swart",
   "license": "MIT",
-  "description": "Aggregated token-usage panel for Cursor, Codex, and Grok subscription agents",
+  "description": "Aggregated quota panel for Cursor, Grok Bot, and Grok build subscription agents",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "AI Usage",
-    "description": "Token usage for Cursor, Codex, and Grok/xAI (excludes local pi)",
+    "description": "Quota bars for Cursor, Grok Bot, and Grok build (excludes local pi)",
     "category": "AI",
     "allowMultiple": false,
     "defaultSection": "right"

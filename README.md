@@ -57,7 +57,7 @@ Stats/process data comes from the Python backend:
 ```bash
 omarchy-task-manager snapshot   # JSON to stdout
 omarchy-task-manager kill PID
-omarchy-task-manager ai-usage   # aggregated Cursor/Codex/Grok usage JSON
+omarchy-task-manager ai-usage   # aggregated Cursor / Grok Bot / Grok build usage JSON
 omarchy-task-manager ai-usage-update
 ```
 
@@ -70,11 +70,11 @@ Four Quickshell plugins install to `~/.config/omarchy/plugins/` and are placed o
 | `sw.art.cursor` | 󱃸 | Launch Cursor (`~/.local/bin/cursor`, fallback `cursor` on PATH) |
 | `sw.art.pi-local` | π | Terminal: `pi --provider llama-local`; green dot when `http://127.0.0.1:8080/health` is 200 |
 | `sw.art.grok` | 󰬬 | Terminal: local `grok` CLI (mise shim; no xAI API calls from the widget) |
-| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Codex + Grok/xAI token usage (excludes local pi) |
+| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Grok Bot + Grok build quota bars (excludes local pi) |
 
 Terminal pattern: `xdg-terminal-exec bash --login -c 'CMD; exec $SHELL'` with ghostty/kitty fallbacks.
 
-The usage panel reads Omarchy agent-usage JSON from `~/.local/state/omarchy/agents/usage/` and refreshes via `omarchy agent usage-update` (Codex) plus lightweight local collectors for Cursor and Grok that fail soft — no Grok Bot API calls from the panel.
+The usage panel reads Omarchy agent-usage JSON from `~/.local/state/omarchy/agents/usage/` and refreshes via `omarchy agent usage-update` (Grok Bot) plus lightweight local collectors for Cursor and Grok build that fail soft — no paid Grok Bot/xAI API calls from the panel.
 
 **Maintainers:** `ai-usage` and `ai-usage-update` are part of the shared `omarchy-task-manager` backend (same binary as Task Manager stats). When bumping pkgrel for TM, kbd-backlight, or fan fixes, keep these subcommands and the AI tray plugin installs in `PKGBUILD` / `install.sh` — the usage panel depends on them.
 
@@ -112,6 +112,8 @@ Waybar is **not required**. The primary path is the Quickshell bar widget.
 If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next to `custom/weather`. Clicking it calls `omarchy-task-manager-toggle` (shell IPC). The icon shows a `running` CSS class while the panel is open.
 
 ## Version
+
+**0.5.5-28** — AI usage panel redesign: Cursor Models + Other Models quota bars, Grok Bot weekly meter, Grok build bar; rename Codex → Grok Bot with backward-compat `codex.json` reads (0.5.5-28 pkgrel; `ai-usage` / AI tray preserved).
 
 **0.5.5-27** — Keyboard backlight: header toggle is switch-only (no "Enabled" label); widen RGB popover so color presets and hex row are not clipped (0.5.5-27 pkgrel; `ai-usage` / AI tray preserved).
 
