@@ -19,8 +19,7 @@ KBD_PLUGIN_ID="sw.art.kbd-backlight"
 KBD_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${KBD_PLUGIN_ID}"
 KBD_PLUGIN_SRC="${ROOT}/shell/${KBD_PLUGIN_ID}"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
-PKGS=(python python-gobject gtk4)
-CLASS="art.sw.omarchy.TaskManager"
+PKGS=(python)
 
 install_deps() {
   command -v pacman >/dev/null 2>&1 || return 0
@@ -54,36 +53,20 @@ install_deps() {
 }
 
 upsert_lua_block() {
+  # Legacy: remove the old GTK autostart block if present (panel needs no autostart).
   local file="$1"
-  mkdir -p "$(dirname "${file}")"
-  python3 - "$file" "$BIN_DST" "$CLASS" <<'PY'
-import pathlib
-import re
-import sys
-
+  [[ -f "${file}" ]] || return 0
+  python3 - "${file}" <<'PY'
+import pathlib, sys
 path = pathlib.Path(sys.argv[1])
-bin_dst = sys.argv[2]
-klass = sys.argv[3]
 begin = "-- omarchy-task-manager begin"
 end = "-- omarchy-task-manager end"
-snippet = "\n".join(
-    [
-        begin,
-        f'o.launch_on_start("{bin_dst}")',
-        f'o.window("{klass}", {{ float = true }})',
-        end,
-        "",
-    ]
-)
-
-if path.exists():
-    text = path.read_text(encoding="utf-8")
-else:
-    text = "-- Extra autostart processes.\n"
-
-# Drop a previous marked block, if any.
-out = []
-skip = False
+if not path.exists():
+    sys.exit(0)
+text = path.read_text(encoding="utf-8")
+if begin not in text:
+    sys.exit(0)
+out, skip = [], False
 for line in text.splitlines(True):
     stripped = line.rstrip("\n")
     if stripped == begin:
@@ -95,42 +78,13 @@ for line in text.splitlines(True):
     if skip:
         continue
     out.append(line)
-
-# Drop unlabeled copies of this app's launch/window (laptop already live).
-kept = []
-i = 0
-class_open = re.compile(
-    r'o\.window\(\s*["\']' + re.escape(klass) + r'["\']'
-)
-while i < len(out):
-    raw = out[i]
-    stripped = raw.strip()
-    if "o.launch_on_start" in stripped and "omarchy-task-manager" in stripped:
-        i += 1
-        continue
-    if class_open.search(stripped):
-        depth = raw.count("{") - raw.count("}")
-        i += 1
-        while i < len(out) and depth > 0:
-            raw = out[i]
-            depth += raw.count("{") - raw.count("}")
-            i += 1
-        continue
-    kept.append(out[i])
-    i += 1
-
-body = "".join(kept).rstrip() + "\n\n" + snippet
-path.write_text(body, encoding="utf-8")
-
+path.write_text("".join(out).rstrip() + "\n", encoding="utf-8")
+print(f"Removed legacy autostart block from {path}")
 PY
 }
 
 ensure_hyprland_requires_autostart() {
-  [[ -f "${HYPRLAND_LUA}" ]] || return 0
-  if grep -qE 'require\(["'"'"']hypr\.autostart["'"'"']\)' "${HYPRLAND_LUA}"; then
-    return 0
-  fi
-  printf '\nrequire("hypr.autostart")\n' >> "${HYPRLAND_LUA}"
+  return 0
 }
 
 # ── Quickshell / Omarchy shell plugin ─────────────────────────────────────────
@@ -143,6 +97,7 @@ install_quickshell_plugin() {
   mkdir -p "${PLUGIN_DIR}"
   install -Dm644 "${PLUGIN_SRC}/manifest.json" "${PLUGIN_DIR}/manifest.json"
   install -Dm644 "${PLUGIN_SRC}/BarWidget.qml"  "${PLUGIN_DIR}/BarWidget.qml"
+  install -Dm644 "${PLUGIN_SRC}/Panel.qml"      "${PLUGIN_DIR}/Panel.qml"
   echo "Quickshell plugin: installed to ${PLUGIN_DIR}"
 }
 
@@ -344,10 +299,9 @@ patch_shell_json_kbd
 upsert_waybar_config
 upsert_waybar_style
 
-echo "Installed Task Manager."
-echo "Launch: ${BIN_DST}"
-echo "Or open \"Task Manager\" from Walker / the application menu."
-echo "Hyprland: autostart (launch-on-login) registered in ${AUTOSTART_LUA}"
+echo "Installed Task Manager (KeyboardPanel popout)."
+echo "Toggle: ${TOGGLE_DST}  or  omarchy-shell shell toggle ${PLUGIN_ID} '{}'"
+echo "Stats:  ${BIN_DST} snapshot"
 echo "Quickshell plugin: ${PLUGIN_DIR}"
 echo "  Bar icon placed in center next to omarchy.weather."
 echo "  Restart shell: omarchy-restart-shell"

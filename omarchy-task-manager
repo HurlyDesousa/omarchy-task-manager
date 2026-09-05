@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Omarchy Task Manager — GTK4 CPU/GPU, thermal, fan monitoring, settings."""
+"""Omarchy Task Manager — stats backend for the Quickshell KeyboardPanel."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -10,27 +11,10 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
+import time
 from pathlib import Path
 
-try:
-    import gi
-
-    gi.require_version("Gtk", "4.0")
-    gi.require_version("Gdk", "4.0")
-    from gi.repository import Gdk, Gio, GLib, Gtk, Pango
-except (ImportError, ValueError) as exc:
-    sys.stderr.write(
-        "Task Manager needs GTK4 and PyGObject.\n"
-        "Install with: pacman -S --needed python python-gobject gtk4\n"
-        f"{exc}\n"
-    )
-    sys.exit(1)
-
-APP_ID = "art.sw.omarchy.TaskManager"
-APP_TITLE = "Task Manager"
-# Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.5-11"
+APP_VERSION = "0.5.5-12"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -39,56 +23,38 @@ PREFERRED_THERMAL = (
     "cpu2-0-top-thermal",
 )
 
-FALLBACK_BG = "#1a1a1a"
-FALLBACK_FG = "#c8c8c8"
+GPU_DEVFREQ = Path("/sys/class/devfreq/3d00000.gpu")
+_GPU_THERMAL_RE = re.compile(r"^gpuss_\d+_thermal$")
+
 FAN_BIN_PRIMARY = "/usr/local/bin/x1e-ec-tool"
 FAN_TIMEOUT = 2.0
-# Reference ceiling for fan meter % (Full Send max on X Elite; read-only display).
 FAN_RPM_MAX = 8000
-
-THEME_DIR = Path.home() / ".local" / "state" / "omarchy" / "current" / "theme"
 
 STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "task-manager"
 PREFS_FILE = STATE_DIR / "prefs.json"
+STATS_STATE_FILE = STATE_DIR / "stats-state.json"
 
-# Hyprland autostart integration
 APP_BINARY = str(Path.home() / ".local" / "bin" / "omarchy-task-manager")
 AUTOSTART_LUA = Path.home() / ".config" / "hypr" / "autostart.lua"
 AUTOSTART_BLOCK_BEGIN = "-- omarchy-task-manager begin"
 AUTOSTART_BLOCK_END = "-- omarchy-task-manager end"
-
-# GPU devfreq (Snapdragon X Elite, simple_ondemand)
-GPU_DEVFREQ = Path("/sys/class/devfreq/3d00000.gpu")
-_GPU_THERMAL_RE = re.compile(r"^gpuss_\d+_thermal$")
+APP_ID = "art.sw.omarchy.TaskManager"
 
 DEFAULT_PREFS: dict = {
     "start_compact": False,
     "remember_expand": True,
     "refresh_ms": 1000,
-    "last_compact": True,   # compact on first run (matches v2 behaviour)
-    "start_hidden": True,   # move to special:taskmanager on launch; bar icon shows/hides it
+    "last_compact": True,
 }
 
-COL_NAME, COL_PID, COL_CPU, COL_CPU_TXT, COL_RSS, COL_RSS_TXT = range(6)
+LEFT_FAN_RE = re.compile(r"Left Fan:\s*(\d+)\s*RPM", re.IGNORECASE)
+RIGHT_FAN_RE = re.compile(r"Right Fan:\s*(\d+)\s*RPM", re.IGNORECASE)
 
 try:
     PAGE_SIZE = int(os.sysconf("SC_PAGE_SIZE"))
 except (OSError, ValueError):
     PAGE_SIZE = 4096
 
-DEFINE_COLOR_RE = re.compile(
-    r"@define-color\s+([A-Za-z0-9_-]+)\s+([^;]+);", re.MULTILINE
-)
-TOML_STR_RE = re.compile(
-    r'^([A-Za-z0-9_-]+)\s*=\s*["\']([^"\']+)["\']', re.MULTILINE
-)
-LEFT_FAN_RE = re.compile(r"Left Fan:\s*(\d+)\s*RPM", re.IGNORECASE)
-RIGHT_FAN_RE = re.compile(r"Right Fan:\s*(\d+)\s*RPM", re.IGNORECASE)
-
-
-# ──────────────────────────────────────────────
-# Prefs
-# ──────────────────────────────────────────────
 
 def load_prefs() -> dict:
     prefs = dict(DEFAULT_PREFS)
@@ -111,8 +77,22 @@ def save_prefs(prefs: dict) -> None:
         pass
 
 
+def load_stats_state() -> dict:
+    try:
+        return json.loads(STATS_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_stats_state(state: dict) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        STATS_STATE_FILE.write_text(json.dumps(state) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _read_autostart_enabled() -> bool:
-    """Return True if the marked block in autostart.lua has an active o.launch_on_start line."""
     try:
         text = AUTOSTART_LUA.read_text(encoding="utf-8")
     except OSError:
@@ -128,13 +108,6 @@ def _read_autostart_enabled() -> bool:
 
 
 def _set_autostart(enabled: bool) -> str:
-    """Enable or disable autostart in autostart.lua.
-
-    Enabling: writes (or replaces) the marked block with o.launch_on_start +
-    float-only o.window rule — no size, move, pin, or position rules.
-    Disabling: removes the marked block entirely.
-    Returns '' on success or an error description.
-    """
     try:
         try:
             text = AUTOSTART_LUA.read_text(encoding="utf-8")
@@ -142,9 +115,7 @@ def _set_autostart(enabled: bool) -> str:
             text = "-- Extra autostart processes.\n"
 
         i_begin = text.find(AUTOSTART_BLOCK_BEGIN)
-        i_end = (
-            text.find(AUTOSTART_BLOCK_END, i_begin) if i_begin >= 0 else -1
-        )
+        i_end = text.find(AUTOSTART_BLOCK_END, i_begin) if i_begin >= 0 else -1
         has_block = i_begin >= 0 and i_end >= 0
 
         if enabled:
@@ -158,427 +129,26 @@ def _set_autostart(enabled: bool) -> str:
             )
             if has_block:
                 block_inner = text[i_begin + len(AUTOSTART_BLOCK_BEGIN) : i_end]
-                # Skip rewrite only when block is already canonical float-only.
                 _window_re = re.compile(
                     r'o\.window\s*\(\s*["\']' + re.escape(APP_ID) + r'["\']'
                 )
                 if (
                     re.search(r"o\.launch_on_start\s*\(", block_inner)
                     and _window_re.search(block_inner)
-                    and not re.search(r"\bmove\s*=", block_inner)
-                    and not re.search(r"\bsize\s*=", block_inner)
-                    and not re.search(r"\bpin\s*=", block_inner)
                 ):
-                    return ""  # already canonical; nothing to write
-                # Replace stale block (may have old size/move rules or missing float).
-                before = text[:i_begin].rstrip("\n") + "\n"
-                after = text[i_end + len(AUTOSTART_BLOCK_END) :].lstrip("\n")
-                new_text = before + new_block + ("\n" if after else "")  + after
+                    return ""
+                text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
             else:
-                new_text = text.rstrip("\n") + "\n\n" + new_block
-        else:
-            if not has_block:
-                return ""  # nothing to change
-            # Remove the entire marked block when disabling.
-            new_text = (
-                text[:i_begin].rstrip("\n")
-                + "\n"
-                + text[i_end + len(AUTOSTART_BLOCK_END) :].lstrip("\n")
-            )
+                text = text.rstrip() + "\n\n" + new_block
+        elif has_block:
+            text = text[:i_begin] + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
 
         AUTOSTART_LUA.parent.mkdir(parents=True, exist_ok=True)
-        AUTOSTART_LUA.write_text(new_text, encoding="utf-8")
+        AUTOSTART_LUA.write_text(text, encoding="utf-8")
         return ""
-    except OSError as exc:
+    except Exception as exc:
         return str(exc)
 
-
-# ──────────────────────────────────────────────
-# Theme
-# ──────────────────────────────────────────────
-
-def _norm_color(value: str) -> str:
-    value = value.strip().strip('"').strip("'").rstrip(";").strip()
-    if re.fullmatch(r"[0-9A-Fa-f]{3,8}", value):
-        return "#" + value
-    return value
-
-
-def _css_color(value: str | None, fallback: str) -> str:
-    if not value:
-        return fallback
-    v = value.strip()
-    if v.startswith("@"):
-        return fallback
-    if re.fullmatch(r"#[0-9A-Fa-f]{3,8}", v):
-        return v
-    if re.fullmatch(r"(?:rgba?|hsla?)\([^;{}]+\)", v, re.I):
-        return v
-    return fallback
-
-
-def _load_colors_toml(path: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    try:
-        import tomllib
-
-        with path.open("rb") as fh:
-            data = tomllib.load(fh)
-    except Exception:
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return out
-        for key, val in TOML_STR_RE.findall(text):
-            out[key.lower()] = _norm_color(val)
-        return out
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            for key, val in node.items():
-                if isinstance(val, str):
-                    out[str(key).lower()] = _norm_color(val)
-                else:
-                    walk(val)
-
-    walk(data)
-    return out
-
-
-def _load_waybar_css(path: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return out
-    for key, val in DEFINE_COLOR_RE.findall(text):
-        out[key.lower()] = _norm_color(val)
-    return out
-
-
-def _gtk_named_colors() -> tuple[str, str, str]:
-    """GTK / Adwaita-dark named colors when Omarchy theme files are absent."""
-    try:
-        settings = Gtk.Settings.get_default()
-        if settings:
-            theme = str(settings.get_property("gtk-theme-name") or "")
-            prefer_dark = bool(
-                settings.get_property("gtk-application-prefer-dark-theme")
-            )
-            if prefer_dark or "dark" in theme.lower():
-                return FALLBACK_BG, FALLBACK_FG, FALLBACK_FG
-            return "#f6f5f4", "#2e3436", "#3584e4"
-    except Exception:
-        pass
-    return FALLBACK_BG, FALLBACK_FG, FALLBACK_FG
-
-
-def load_theme_colors() -> tuple[str, str, str]:
-    gtk_bg, gtk_fg, gtk_accent = _gtk_named_colors()
-    colors: dict[str, str] = {}
-    theme_root = THEME_DIR
-    try:
-        if theme_root.is_symlink():
-            theme_root = theme_root.resolve()
-    except OSError:
-        pass
-    toml_path = theme_root / "colors.toml"
-    css_path = theme_root / "waybar.css"
-    if toml_path.is_file():
-        colors.update(_load_colors_toml(toml_path))
-    if css_path.is_file():
-        colors.update(_load_waybar_css(css_path))
-    bg = _css_color(colors.get("background"), gtk_bg)
-    fg = _css_color(colors.get("foreground"), gtk_fg)
-    accent = _css_color(
-        colors.get("accent")
-        or colors.get("color4")
-        or colors.get("blue")
-        or colors.get("theme-blue"),
-        gtk_accent,
-    )
-    return bg, fg, accent
-
-
-def build_css(bg: str, fg: str, accent: str) -> str:
-    return f"""
-window.omarchy-tm {{
-  background-color: {bg};
-  color: {fg};
-  font-family: "JetBrainsMono Nerd Font", "JetBrainsMono NFM",
-               "JetBrainsMono NF", "JetBrains Mono", monospace;
-  font-size: 12px;
-}}
-label {{
-  color: {fg};
-}}
-label.dim {{
-  opacity: 0.72;
-}}
-label.stat-value {{
-  font-weight: 600;
-}}
-label.fan-meter-val {{
-  font-size: 11px;
-  opacity: 0.92;
-  min-width: 72px;
-}}
-label.section-hdr {{
-  font-weight: 600;
-  opacity: 0.88;
-}}
-progressbar > trough {{
-  min-height: 10px;
-  min-width: 80px;
-  background-color: alpha({fg}, 0.12);
-  border: none;
-  border-radius: 2px;
-  padding: 0;
-}}
-progressbar > trough > progress {{
-  min-height: 10px;
-  background-color: {accent};
-  border: none;
-  border-radius: 2px;
-}}
-progressbar.cpu-core > trough {{
-  min-height: 8px;
-  min-width: 44px;
-}}
-progressbar.fan-meter > trough {{
-  min-height: 8px;
-  min-width: 36px;
-}}
-progressbar.fan-meter > trough > progress {{
-  min-height: 8px;
-  transition: all 400ms ease-out;
-}}
-entry {{
-  background-color: alpha({fg}, 0.08);
-  color: {fg};
-  caret-color: {fg};
-  border: 1px solid alpha({fg}, 0.16);
-  border-radius: 4px;
-  min-height: 26px;
-  padding: 2px 8px;
-}}
-entry:focus {{
-  border-color: {accent};
-}}
-button {{
-  background-color: alpha({fg}, 0.10);
-  color: {fg};
-  border: 1px solid alpha({fg}, 0.18);
-  border-radius: 4px;
-  min-height: 26px;
-  padding: 2px 12px;
-}}
-button:hover {{
-  background-color: {accent};
-  color: {bg};
-}}
-button:disabled {{
-  opacity: 0.45;
-}}
-button.expand-toggle {{
-  min-height: 24px;
-  padding: 2px 10px;
-  background: none;
-  border: none;
-}}
-button.expand-toggle:hover {{
-  background-color: alpha({fg}, 0.08);
-  color: {fg};
-}}
-menubutton > button {{
-  background: none;
-  border: none;
-  padding: 2px 8px;
-  min-height: 24px;
-  min-width: 28px;
-  font-size: 13px;
-  color: {fg};
-}}
-menubutton > button:hover {{
-  background-color: alpha({fg}, 0.08);
-  color: {fg};
-}}
-menubutton image {{
-  color: {fg};
-}}
-treeview {{
-  background-color: {bg};
-  color: {fg};
-}}
-treeview:selected {{
-  background-color: {accent};
-  color: {bg};
-}}
-treeview header button {{
-  background-color: alpha({fg}, 0.06);
-  color: {fg};
-  border: none;
-  border-bottom: 1px solid alpha({fg}, 0.14);
-  font-weight: 600;
-  padding: 2px 6px;
-  min-height: 22px;
-}}
-scrolledwindow {{
-  border: 1px solid alpha({fg}, 0.12);
-  border-radius: 4px;
-}}
-scrollbar slider {{
-  background-color: alpha({fg}, 0.28);
-  border-radius: 4px;
-  min-width: 8px;
-}}
-popover contents {{
-  background-color: {bg};
-  border: 1px solid alpha({fg}, 0.22);
-  border-radius: 6px;
-}}
-popover label {{
-  color: {fg};
-}}
-popover checkbutton label {{
-  color: {fg};
-}}
-"""
-
-
-def _provider_load(provider: Gtk.CssProvider, css: str) -> None:
-    if hasattr(provider, "load_from_string"):
-        provider.load_from_string(css)
-        return
-    data = css.encode("utf-8")
-    try:
-        provider.load_from_data(data)
-    except TypeError:
-        provider.load_from_data(data, len(data))
-
-
-_THEME_PROVIDER: Gtk.CssProvider | None = None
-
-
-def apply_theme() -> None:
-    global _THEME_PROVIDER
-    bg, fg, accent = load_theme_colors()
-    css = build_css(bg, fg, accent)
-    if _THEME_PROVIDER is None:
-        _THEME_PROVIDER = Gtk.CssProvider()
-    try:
-        _provider_load(_THEME_PROVIDER, css)
-    except Exception:
-        _provider_load(_THEME_PROVIDER, build_css(FALLBACK_BG, FALLBACK_FG, FALLBACK_FG))
-    display = Gdk.Display.get_default()
-    if display is None:
-        return
-    Gtk.StyleContext.add_provider_for_display(
-        display, _THEME_PROVIDER, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-    )
-
-
-def _file_monitor_flags() -> Gio.FileMonitorFlags:
-    flags = Gio.FileMonitorFlags.NONE
-    if hasattr(Gio.FileMonitorFlags, "WATCH_MOVES"):
-        flags |= Gio.FileMonitorFlags.WATCH_MOVES
-    return flags
-
-
-def watch_theme_dir(on_change) -> list[Gio.FileMonitor]:
-    """Watch Omarchy state/theme paths; on_change runs on the main loop.
-
-    Monitors the whole state directory so atomic current/ symlink swaps
-    (theme changes) are caught, in addition to the live theme directory.
-    """
-    flags = _file_monitor_flags()
-    monitors: list[Gio.FileMonitor] = []
-    seen: set[str] = set()
-    candidates = [
-        Path.home() / ".local" / "state" / "omarchy",
-        THEME_DIR.parent,
-        THEME_DIR,
-    ]
-
-    def _changed(*_args) -> None:
-        GLib.idle_add(on_change)
-
-    for path in candidates:
-        try:
-            if not path.is_dir() and not path.is_symlink():
-                continue
-            key = str(path.resolve() if path.is_symlink() else path)
-            if key in seen:
-                continue
-            seen.add(key)
-        except OSError:
-            continue
-        gfile = Gio.File.new_for_path(str(path))
-        try:
-            monitor = gfile.monitor_directory(flags, None)
-        except (GLib.Error, TypeError, AttributeError):
-            try:
-                monitor = gfile.monitor(flags, None)
-            except Exception:
-                continue
-        monitor.connect("changed", _changed)
-        monitors.append(monitor)
-    return monitors
-
-
-def _add_css_class(widget: Gtk.Widget, name: str) -> None:
-    if hasattr(widget, "add_css_class"):
-        widget.add_css_class(name)
-    else:
-        widget.get_style_context().add_class(name)
-
-
-def _remove_css_class(widget: Gtk.Widget, name: str) -> None:
-    if hasattr(widget, "remove_css_class"):
-        widget.remove_css_class(name)
-    else:
-        widget.get_style_context().remove_class(name)
-
-
-# ──────────────────────────────────────────────
-# Monitor geometry
-# ──────────────────────────────────────────────
-
-def _primary_monitor_geometry() -> tuple[int, int, int, int] | None:
-    try:
-        display = Gdk.Display.get_default()
-        if display is None:
-            return None
-        monitors = display.get_monitors()
-        if monitors.get_n_items() <= 0:
-            return None
-        geo = monitors.get_item(0).get_geometry()
-        return geo.x, geo.y, geo.width, geo.height
-    except Exception:
-        return None
-
-
-def quarter_monitor_size() -> tuple[int, int]:
-    """50 % wide × 25 % tall — the compact footprint."""
-    geo = _primary_monitor_geometry()
-    if geo is None:
-        return 960, 270
-    _, _, mw, mh = geo
-    return max(480, int(mw * 0.5)), max(180, int(mh * 0.25))
-
-
-def expanded_monitor_size() -> tuple[int, int]:
-    """50 % wide × 50 % tall — the expanded footprint."""
-    geo = _primary_monitor_geometry()
-    if geo is None:
-        return 960, 540
-    _, _, mw, mh = geo
-    return max(640, int(mw * 0.5)), max(400, int(mh * 0.5))
-
-
-# ──────────────────────────────────────────────
-# CPU stats
-# ──────────────────────────────────────────────
 
 def cpu_pct(prev: tuple[int, int] | None, cur: tuple[int, int]) -> float:
     if prev is None:
@@ -592,7 +162,6 @@ def cpu_pct(prev: tuple[int, int] | None, cur: tuple[int, int]) -> float:
 
 
 def read_proc_stat() -> tuple[tuple[int, int] | None, dict[int, tuple[int, int]]]:
-    """Overall (busy, idle) plus per-core index → (busy, idle). Core count not hardcoded."""
     overall = None
     cores: dict[int, tuple[int, int]] = {}
     try:
@@ -652,12 +221,7 @@ def read_cpu_temp() -> float | None:
     return None
 
 
-# ──────────────────────────────────────────────
-# GPU stats  (Snapdragon X Elite, devfreq + hwmon)
-# ──────────────────────────────────────────────
-
 def read_gpu_usage() -> float | None:
-    """cur_freq / max_freq from /sys/class/devfreq/3d00000.gpu → 0–100 %, or None."""
     try:
         cur = int((GPU_DEVFREQ / "cur_freq").read_text(encoding="utf-8").strip())
         mx = int((GPU_DEVFREQ / "max_freq").read_text(encoding="utf-8").strip())
@@ -669,7 +233,6 @@ def read_gpu_usage() -> float | None:
 
 
 def read_gpu_temp() -> float | None:
-    """Max of gpuss_*_thermal hwmon sensors in °C, or None."""
     base = Path("/sys/class/hwmon")
     try:
         hwmons = list(base.iterdir())
@@ -691,12 +254,7 @@ def read_gpu_temp() -> float | None:
     return max(temps) if temps else None
 
 
-# ──────────────────────────────────────────────
-# Memory stats  (/proc/meminfo)
-# ──────────────────────────────────────────────
-
 def read_mem_usage() -> tuple[int, int, float] | None:
-    """MemTotal and MemAvailable (kB) → (used_kib, total_kib, pct), or None."""
     total_kib: int | None = None
     avail_kib: int | None = None
     try:
@@ -716,17 +274,11 @@ def read_mem_usage() -> tuple[int, int, float] | None:
 
 
 def fmt_mem_gib_pair(used_kib: int, total_kib: int) -> str:
-    """Format used/total as GiB, e.g. '4.2 / 16.0 GiB'."""
     gib = 1024 * 1024
     return f"{used_kib / gib:.1f} / {total_kib / gib:.1f} GiB"
 
 
-# ──────────────────────────────────────────────
-# Uptime  (/proc/uptime)
-# ──────────────────────────────────────────────
-
 def read_uptime() -> float | None:
-    """Seconds since boot from /proc/uptime, or None."""
     try:
         with open("/proc/uptime", encoding="utf-8") as fh:
             return float(fh.read().split()[0])
@@ -735,7 +287,6 @@ def read_uptime() -> float | None:
 
 
 def fmt_uptime(seconds: float) -> str:
-    """Compact uptime, e.g. '3d 2h 12m', '3h 12m', '45m'."""
     total = max(0, int(seconds))
     days = total // 86400
     rem = total % 86400
@@ -751,12 +302,7 @@ def fmt_uptime(seconds: float) -> str:
     return " ".join(parts)
 
 
-# ──────────────────────────────────────────────
-# Fan helpers
-# ──────────────────────────────────────────────
-
 def _run_cmd(argv: list[str]) -> str | None:
-    """Run argv; return combined stdout+stderr or None on timeout/not-found."""
     env = os.environ.copy()
     env["LC_ALL"] = "C"
     try:
@@ -769,11 +315,7 @@ def _run_cmd(argv: list[str]) -> str | None:
             stdin=subprocess.DEVNULL,
             env=env,
         )
-    except FileNotFoundError:
-        return None
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    except Exception:
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
     return ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
 
@@ -791,7 +333,6 @@ def _parse_fan_text(output: str | None) -> tuple[int | None, int | None] | None:
 
 
 def _hwmon_fan_speeds() -> tuple[int | None, int | None]:
-    """Last-resort: first two fan*_input nodes under /sys/class/hwmon."""
     base = Path("/sys/class/hwmon")
     try:
         hwmons = sorted(base.iterdir())
@@ -799,30 +340,25 @@ def _hwmon_fan_speeds() -> tuple[int | None, int | None]:
         return None, None
     rpms: list[int] = []
     for hw in hwmons:
-        for node in sorted(hw.glob("fan*_input")):
+        for fan in sorted(hw.glob("fan*_input")):
             try:
-                raw = int(node.read_text(encoding="utf-8").strip())
+                rpms.append(int(fan.read_text(encoding="utf-8").strip()))
             except (OSError, ValueError):
                 continue
-            if raw > 0:
-                rpms.append(raw)
-            if len(rpms) >= 2:
-                return rpms[0], rpms[1]
     if not rpms:
         return None, None
-    if len(rpms) == 1:
-        return rpms[0], None
-    return rpms[0], rpms[1]
+    left = rpms[0]
+    right = rpms[1] if len(rpms) > 1 else None
+    return left, right
 
 
 def _fan_executable() -> str | None:
-    if os.path.isfile(FAN_BIN_PRIMARY):
+    if Path(FAN_BIN_PRIMARY).is_file():
         return FAN_BIN_PRIMARY
     return shutil.which("x1e-ec-tool")
 
 
 def _fan_exec(exe: str, args: list[str]) -> str | None:
-    """Try exe directly, then sudo -n. Returns output or None."""
     out = _run_cmd([exe] + args)
     if out is not None:
         return out
@@ -835,7 +371,6 @@ def _fan_exec(exe: str, args: list[str]) -> str | None:
 
 
 def read_fan_speeds() -> tuple[int | None, int | None]:
-    """x1e-ec-tool get-speed → sudo -n → hwmon fallback. Never raises."""
     exe = _fan_executable()
     if exe:
         parsed = _parse_fan_text(_fan_exec(exe, ["get-speed"]))
@@ -856,10 +391,6 @@ def fmt_fan_meter(rpm: int | None) -> str:
     pct = fan_meter_fraction(rpm) * 100.0
     return f"{rpm} {pct:.0f}%"
 
-
-# ──────────────────────────────────────────────
-# Process helpers
-# ──────────────────────────────────────────────
 
 def fmt_bytes(num: int) -> str:
     value = float(num)
@@ -923,7 +454,6 @@ def _rss_bytes(pid: int, rest: list[str]) -> int:
 
 
 def iter_processes() -> list[tuple[int, str, int, int, int]]:
-    """(pid, name, cpu_jiffies, rss_bytes, starttime). Skips EACCES quietly."""
     results: list[tuple[int, str, int, int, int]] = []
     try:
         names = os.listdir("/proc")
@@ -942,16 +472,16 @@ def iter_processes() -> list[tuple[int, str, int, int, int]]:
         if parsed is None:
             continue
         comm, rest = parsed
-        if len(rest) < 20:
+        if len(rest) < 22:
             continue
         try:
-            utime = int(rest[11])
-            stime = int(rest[12])
+            jiffies = int(rest[11]) + int(rest[12])
             starttime = int(rest[19])
         except ValueError:
             continue
+        pname = _process_name(pid, comm)
         rss = _rss_bytes(pid, rest)
-        results.append((pid, _process_name(pid, comm), utime + stime, rss, starttime))
+        results.append((pid, pname, jiffies, rss, starttime))
     return results
 
 
@@ -961,940 +491,237 @@ def pid_alive(pid: int, starttime: int | None = None) -> bool:
             stat = fh.read()
     except OSError:
         return False
+    if starttime is None:
+        return True
     parsed = _comm_from_stat(stat)
     if parsed is None:
         return False
-    if starttime is None:
-        return True
     rest = parsed[1]
     if len(rest) < 20:
-        return True
+        return False
     try:
         return int(rest[19]) == starttime
     except ValueError:
-        return True
-
-
-# ──────────────────────────────────────────────
-# ConfirmDialog
-# ──────────────────────────────────────────────
-
-class ConfirmDialog(Gtk.Window):
-    def __init__(
-        self,
-        parent: Gtk.Window,
-        heading: str,
-        body: str,
-        accept_label: str,
-        on_result,
-    ) -> None:
-        super().__init__(title=APP_TITLE, transient_for=parent, modal=True)
-        self.set_default_size(440, 150)
-        self.set_resizable(False)
-        self._on_result = on_result
-        self._decided = False
-
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        root.set_margin_top(14)
-        root.set_margin_bottom(14)
-        root.set_margin_start(16)
-        root.set_margin_end(16)
-
-        title = Gtk.Label(label=heading, xalign=0, wrap=True)
-        _add_css_class(title, "stat-value")
-        body_l = Gtk.Label(label=body, xalign=0, wrap=True)
-        _add_css_class(body_l, "dim")
-
-        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        buttons.set_halign(Gtk.Align.END)
-        cancel = Gtk.Button(label="Cancel")
-        accept = Gtk.Button(label=accept_label)
-        cancel.connect("clicked", self._cancel)
-        accept.connect("clicked", self._accept)
-        buttons.append(cancel)
-        buttons.append(accept)
-
-        root.append(title)
-        root.append(body_l)
-        root.append(buttons)
-        self.set_child(root)
-        self.connect("close-request", self._on_close)
-
-    def _finish(self, accepted: bool) -> None:
-        if self._decided:
-            return
-        self._decided = True
-        cb = self._on_result
-        self.destroy()
-        if cb is not None:
-            cb(accepted)
-
-    def _cancel(self, *_args) -> None:
-        self._finish(False)
-
-    def _accept(self, *_args) -> None:
-        self._finish(True)
-
-    def _on_close(self, *_args) -> bool:
-        self._finish(False)
-        return True
-
-
-# ──────────────────────────────────────────────
-# Main window
-# ──────────────────────────────────────────────
-
-class TaskManagerWindow(Gtk.ApplicationWindow):
-    def __init__(self, application: Gtk.Application) -> None:
-        super().__init__(application=application, title=APP_TITLE)
-        _add_css_class(self, "omarchy-tm")
-
-        self._prefs = load_prefs()
-
-        # CPU state
-        self._prev_overall: tuple[int, int] | None = None
-        self._prev_cores: dict[int, tuple[int, int]] = {}
-        self._core_ids: list[int] = []
-        self._core_bars: list[Gtk.ProgressBar] = []
-
-        # Process state
-        self._prev_proc: dict[tuple[int, int], int] = {}
-        self._prev_total_jiffies: int | None = None
-        self._row_iters: dict[int, Gtk.TreeIter] = {}
-        self._filter_text = ""
-
-        # Fan monitoring state
-        self._fan_busy = False
-
-        # Window state
-        self._expanded = False
-        self._tick_id = 0
-        self._focus_out_id = 0
-        self._startup_hide_done = False
-
-        self._build_ui()
-        self._apply_startup_state()
-
-        self.connect("map", self._on_map)
-        self.connect("close-request", self._on_close)
-        self.connect("notify::is-active", self._on_is_active_changed)
-
-        self._tick()
-        self._tick_id = GLib.timeout_add(
-            self._prefs.get("refresh_ms", 1000), self._tick
-        )
-
-    # ── Build UI ─────────────────────────────────
-
-    def _build_ui(self) -> None:
-        self._root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self._root.set_margin_top(8)
-        self._root.set_margin_bottom(8)
-        self._root.set_margin_start(12)
-        self._root.set_margin_end(12)
-
-        stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-
-        # CPU row — usage % and bar on left, temp on right (mirrors GPU row)
-        cpu_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        cpu_key = Gtk.Label(label="CPU", xalign=0)
-        cpu_key.set_width_chars(4)
-        _add_css_class(cpu_key, "dim")
-        self.cpu_value = Gtk.Label(label="0%", xalign=0)
-        self.cpu_value.set_width_chars(5)
-        _add_css_class(self.cpu_value, "stat-value")
-        self.cpu_bar = Gtk.ProgressBar()
-        self.cpu_bar.set_hexpand(True)
-        self.cpu_bar.set_valign(Gtk.Align.CENTER)
-        self.cpu_temp_label = Gtk.Label(label=EM_DASH, xalign=0)
-        _add_css_class(self.cpu_temp_label, "stat-value")
-        cpu_row.append(cpu_key)
-        cpu_row.append(self.cpu_value)
-        cpu_row.append(self.cpu_bar)
-        cpu_row.append(self.cpu_temp_label)
-
-        # GPU row  (usage % + temp, both labelled by the row key)
-        self._gpu_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        gpu_key = Gtk.Label(label="GPU", xalign=0)
-        gpu_key.set_width_chars(4)
-        _add_css_class(gpu_key, "dim")
-        self.gpu_value = Gtk.Label(label=EM_DASH, xalign=0)
-        self.gpu_value.set_width_chars(5)
-        _add_css_class(self.gpu_value, "stat-value")
-        self.gpu_bar = Gtk.ProgressBar()
-        self.gpu_bar.set_hexpand(True)
-        self.gpu_bar.set_valign(Gtk.Align.CENTER)
-        self.gpu_temp_label = Gtk.Label(label=EM_DASH, xalign=0)
-        _add_css_class(self.gpu_temp_label, "stat-value")
-        self._gpu_row.append(gpu_key)
-        self._gpu_row.append(self.gpu_value)
-        self._gpu_row.append(self.gpu_bar)
-        self._gpu_row.append(self.gpu_temp_label)
-
-        # RAM row — usage % and bar on left, used/total on right (mirrors CPU/GPU)
-        ram_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        ram_key = Gtk.Label(label="RAM", xalign=0)
-        ram_key.set_width_chars(4)
-        _add_css_class(ram_key, "dim")
-        self.ram_value = Gtk.Label(label="0%", xalign=0)
-        self.ram_value.set_width_chars(5)
-        _add_css_class(self.ram_value, "stat-value")
-        self.ram_bar = Gtk.ProgressBar()
-        self.ram_bar.set_hexpand(True)
-        self.ram_bar.set_valign(Gtk.Align.CENTER)
-        self.ram_detail_label = Gtk.Label(label=EM_DASH, xalign=0)
-        _add_css_class(self.ram_detail_label, "stat-value")
-        ram_row.append(ram_key)
-        ram_row.append(self.ram_value)
-        ram_row.append(self.ram_bar)
-        ram_row.append(self.ram_detail_label)
-
-        # Per-core FlowBox
-        self.core_flow = Gtk.FlowBox()
-        self.core_flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.core_flow.set_homogeneous(False)
-        self.core_flow.set_max_children_per_line(6)
-        self.core_flow.set_min_children_per_line(2)
-        self.core_flow.set_column_spacing(6)
-        self.core_flow.set_row_spacing(4)
-
-        # Meta: dual fan meters + uptime — compact-friendly
-        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        meta.set_hexpand(True)
-
-        def _fan_meter(side: str) -> tuple[Gtk.Box, Gtk.ProgressBar, Gtk.Label]:
-            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            box.set_hexpand(True)
-            key = Gtk.Label(label=side, xalign=0)
-            key.set_width_chars(1)
-            _add_css_class(key, "dim")
-            bar = Gtk.ProgressBar()
-            _add_css_class(bar, "fan-meter")
-            bar.set_valign(Gtk.Align.CENTER)
-            bar.set_hexpand(True)
-            val = Gtk.Label(label=EM_DASH, xalign=0)
-            _add_css_class(val, "fan-meter-val")
-            box.append(key)
-            box.append(bar)
-            box.append(val)
-            return box, bar, val
-
-        fan_l_wrap, self.fan_left_bar, self.fan_left_val = _fan_meter("L")
-        fan_r_wrap, self.fan_right_bar, self.fan_right_val = _fan_meter("R")
-
-        uptime_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        uptime_key = Gtk.Label(label="Up", xalign=0)
-        _add_css_class(uptime_key, "dim")
-        self.uptime_label = Gtk.Label(label=EM_DASH, xalign=0)
-        _add_css_class(self.uptime_label, "stat-value")
-        uptime_box.append(uptime_key)
-        uptime_box.append(self.uptime_label)
-
-        meta.append(fan_l_wrap)
-        meta.append(fan_r_wrap)
-        meta.append(uptime_box)
-
-        # Processes header: toggle | search (hexpand) | gear
-        proc_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.expand_btn = Gtk.Button(label="Processes \u25be")
-        _add_css_class(self.expand_btn, "expand-toggle")
-        self.expand_btn.set_halign(Gtk.Align.START)
-        self.expand_btn.connect("clicked", self._toggle_processes)
-
-        # Search entry lives in the header permanently; always filters the store
-        self._search = Gtk.Entry()
-        self._search.set_placeholder_text("Filter by name or PID")
-        self._search.set_hexpand(True)
-        self._search.connect("changed", self._on_search)
-
-        self._gear_btn = Gtk.MenuButton()
-        self._gear_btn.set_icon_name("emblem-system-symbolic")
-        try:
-            self._gear_btn.set_always_show_arrow(False)
-        except Exception:
-            pass
-        self._gear_btn.set_popover(self._build_settings_popover())
-
-        proc_hdr.append(self.expand_btn)
-        proc_hdr.append(self._search)
-        proc_hdr.append(self._gear_btn)
-
-        stats.append(cpu_row)
-        stats.append(self._gpu_row)
-        stats.append(ram_row)
-        stats.append(self.core_flow)
-        stats.append(meta)
-        stats.append(proc_hdr)
-
-        # Process box — appended on expand, removed on collapse
-        # (search entry lives in the header; only scroll + footer toggle)
-        self.store = Gtk.ListStore(str, int, float, str, int, str)
-        self.filtered = self.store.filter_new()
-        self.filtered.set_visible_func(self._row_visible)
-        self.sorted = Gtk.TreeModelSort.new_with_model(self.filtered)
-        self.sorted.set_sort_column_id(COL_CPU, Gtk.SortType.DESCENDING)
-
-        self.tree = Gtk.TreeView(model=self.sorted)
-        self.tree.set_headers_clickable(True)
-        self.tree.set_enable_search(True)
-        self.tree.set_search_column(COL_NAME)
-        self.tree.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
-        self.tree.get_selection().connect("changed", self._on_sel)
-        self.tree.connect("row-activated", self._on_row_activated)
-
-        name_r = Gtk.CellRendererText()
-        name_r.props.ellipsize = Pango.EllipsizeMode.END
-        name_col = Gtk.TreeViewColumn("Name", name_r, text=COL_NAME)
-        name_col.set_expand(True)
-        name_col.set_resizable(True)
-        name_col.set_sort_column_id(COL_NAME)
-        name_col.set_min_width(160)
-
-        pid_r = Gtk.CellRendererText()
-        pid_r.props.xalign = 1.0
-        pid_col = Gtk.TreeViewColumn("PID", pid_r, text=COL_PID)
-        pid_col.set_sort_column_id(COL_PID)
-        pid_col.set_min_width(70)
-        pid_col.set_alignment(1.0)
-
-        cpu_r = Gtk.CellRendererText()
-        cpu_r.props.xalign = 1.0
-        cpu_col = Gtk.TreeViewColumn("CPU %", cpu_r, text=COL_CPU_TXT)
-        cpu_col.set_sort_column_id(COL_CPU)
-        cpu_col.set_min_width(70)
-        cpu_col.set_alignment(1.0)
-
-        mem_r = Gtk.CellRendererText()
-        mem_r.props.xalign = 1.0
-        mem_col = Gtk.TreeViewColumn("Memory", mem_r, text=COL_RSS_TXT)
-        mem_col.set_sort_column_id(COL_RSS)
-        mem_col.set_min_width(90)
-        mem_col.set_alignment(1.0)
-
-        for col in (name_col, pid_col, cpu_col, mem_col):
-            self.tree.append_column(col)
-
-        self._scroll = Gtk.ScrolledWindow()
-        self._scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        self._scroll.set_vexpand(True)
-        self._scroll.set_min_content_height(160)
-        self._scroll.set_child(self.tree)
-
-        self._footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self._footer.set_halign(Gtk.Align.END)
-        self.end_btn = Gtk.Button(label="End process")
-        self.end_btn.set_sensitive(False)
-        self.end_btn.connect("clicked", self._on_end_clicked)
-        self._footer.append(self.end_btn)
-
-        self._process_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self._process_box.append(self._scroll)
-        self._process_box.append(self._footer)
-
-        self._root.append(stats)
-        self.set_child(self._root)
-
-    def _build_settings_popover(self) -> Gtk.Popover:
-        pop = Gtk.Popover()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_size_request(220, -1)
-
-        def section(text: str) -> Gtk.Label:
-            lbl = Gtk.Label(label=text, xalign=0)
-            _add_css_class(lbl, "section-hdr")
-            return lbl
-
-        # Startup
-        box.append(section("Startup"))
-        self._p_start_compact = Gtk.CheckButton(label="Start compact")
-        self._p_start_compact.set_active(self._prefs.get("start_compact", False))
-        self._p_start_compact.connect("toggled", self._on_p_start_compact)
-        box.append(self._p_start_compact)
-
-        self._p_remember = Gtk.CheckButton(label="Remember last state")
-        self._p_remember.set_active(self._prefs.get("remember_expand", True))
-        self._p_remember.connect("toggled", self._on_p_remember)
-        box.append(self._p_remember)
-
-        self._p_start_hidden = Gtk.CheckButton(label="Start hidden")
-        self._p_start_hidden.set_tooltip_text(
-            "On launch, move the window to special:taskmanager.\n"
-            "Use the bar icon to show or hide it."
-        )
-        self._p_start_hidden.set_active(self._prefs.get("start_hidden", True))
-        self._p_start_hidden.connect("toggled", self._on_p_start_hidden)
-        box.append(self._p_start_hidden)
-
-        self._p_autostart = Gtk.CheckButton(label="Start with Hyprland session")
-        self._p_autostart.set_tooltip_text(
-            "Adds/removes o.launch_on_start in\n"
-            "~/.config/hypr/autostart.lua."
-        )
-        self._p_autostart.set_active(_read_autostart_enabled())
-        self._p_autostart.connect("toggled", self._on_p_autostart)
-        box.append(self._p_autostart)
-
-        # Refresh
-        box.append(section("Refresh"))
-        refresh_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        refresh_lbl = Gtk.Label(label="Interval", xalign=0)
-        refresh_lbl.set_hexpand(True)
-        _add_css_class(refresh_lbl, "dim")
-        ms_labels = ["500 ms", "1 s", "2 s", "5 s"]
-        ms_values = [500, 1000, 2000, 5000]
-        try:
-            self._p_refresh = Gtk.DropDown.new_from_strings(ms_labels)
-            cur_ms = self._prefs.get("refresh_ms", 1000)
-            idx = ms_values.index(cur_ms) if cur_ms in ms_values else 1
-            self._p_refresh.set_selected(idx)
-            self._p_refresh.connect("notify::selected", self._on_p_refresh)
-            refresh_row.append(refresh_lbl)
-            refresh_row.append(self._p_refresh)
-            box.append(refresh_row)
-        except AttributeError:
-            pass  # GTK < 4.6; interval stays at startup value
-
-        version_lbl = Gtk.Label(label=f"Version {APP_VERSION}", xalign=0)
-        _add_css_class(version_lbl, "dim")
-        box.append(version_lbl)
-
-        pop.set_child(box)
-        return pop
-
-    # ── Startup / map / close ─────────────────────
-
-    def _apply_startup_state(self) -> None:
-        start_compact = self._prefs.get("start_compact", False)
-        remember = self._prefs.get("remember_expand", True)
-        last_compact = self._prefs.get("last_compact", True)
-        if start_compact or (remember and last_compact):
-            # Start compact: stats strip only
-            self._expanded = False
-            w, h = quarter_monitor_size()
-            self.set_default_size(w, h)
-        else:
-            # Start expanded: show process list immediately
-            self._expanded = True
-            self._root.append(self._process_box)
-            self.expand_btn.set_label("Processes \u25b4")
-            w, h = expanded_monitor_size()
-            self.set_default_size(w, h)
-
-    def _on_map(self, *_args) -> None:
-        try:
-            self.unmaximize()
-        except Exception:
-            pass
-        if not self._startup_hide_done and self._prefs.get("start_hidden", True):
-            self._startup_hide_done = True
-            # Wait ~150 ms so Hyprland has registered the window before we move it.
-            GLib.timeout_add(150, self._do_startup_hide)
-
-    def _do_startup_hide(self) -> bool:
-        threading.Thread(
-            target=self._hide_to_special, daemon=True, name="startup-hide"
-        ).start()
         return False
 
-    def _on_close(self, *_args) -> bool:
-        if self._tick_id:
-            GLib.source_remove(self._tick_id)
-            self._tick_id = 0
-        if self._focus_out_id:
-            GLib.source_remove(self._focus_out_id)
-            self._focus_out_id = 0
-        if self._prefs.get("remember_expand", True):
-            self._prefs["last_compact"] = not self._expanded
-            save_prefs(self._prefs)
-        return False
 
-    # ── Click-outside / focus-out dismiss ────────
+def kill_process(pid: int) -> tuple[bool, str]:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False, "Process not found"
+    except PermissionError:
+        return False, "Permission denied"
+    except OSError as exc:
+        return False, str(exc)
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return True, ""
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True, ""
+    except PermissionError:
+        return False, "Permission denied — could not SIGKILL"
+    except OSError as exc:
+        return False, str(exc)
+    return True, ""
 
-    def _on_is_active_changed(self, _window, _pspec) -> None:
-        """Schedule a hide when the window loses focus; cancel if it regains it."""
-        if self.get_property("is-active"):
-            if self._focus_out_id:
-                GLib.source_remove(self._focus_out_id)
-                self._focus_out_id = 0
-            return
-        if self._focus_out_id:
-            return
-        self._focus_out_id = GLib.timeout_add(250, self._maybe_hide_to_special)
 
-    def _maybe_hide_to_special(self) -> bool:
-        """Fired 250 ms after focus-out.  Hide unless a child dialog is active."""
-        self._focus_out_id = 0
-        # Regained focus in the meantime — stay visible.
-        if self.get_property("is-active"):
-            return False
-        # A child window (e.g. ConfirmDialog) is active — that's still "inside the app".
-        app = self.get_application()
-        if app is not None:
-            for win in app.get_windows():
-                if win is not self and win.get_visible() and win.get_property("is-active"):
-                    return False
-        threading.Thread(
-            target=self._hide_to_special, daemon=True, name="hide-self"
-        ).start()
-        return False
+def build_snapshot() -> dict:
+    state = load_stats_state()
+    overall, cores = read_proc_stat()
+    prev_overall = state.get("prev_overall")
+    prev_overall_t = tuple(prev_overall) if isinstance(prev_overall, list) and len(prev_overall) == 2 else None
+    prev_cores_raw = state.get("prev_cores", {})
+    prev_cores: dict[int, tuple[int, int]] = {}
+    if isinstance(prev_cores_raw, dict):
+        for key, val in prev_cores_raw.items():
+            if isinstance(val, list) and len(val) == 2:
+                try:
+                    prev_cores[int(key)] = (int(val[0]), int(val[1]))
+                except (TypeError, ValueError):
+                    pass
 
-    def _hide_to_special(self) -> None:
-        """Hide the Task Manager window.
+    cpu_pct_val = cpu_pct(prev_overall_t, overall) if overall else 0.0
+    core_rows = []
+    for idx in sorted(cores):
+        cur = cores[idx]
+        prev = prev_cores.get(idx)
+        core_rows.append({"id": idx, "pct": round(cpu_pct(prev, cur), 1)})
 
-        Two cases:
-        - Window is on a regular workspace (first launch, or moved back by Hyprland):
-          move it to special:taskmanager with follow=false so the special workspace
-          is NOT shown — identical to omarchy-task-manager-toggle's hide path.
-        - Window is already in special:taskmanager but the workspace overlay is
-          currently visible (shown via bar icon → toggle_special): call
-          toggle_special to collapse the overlay.  We confirm visibility first
-          via hyprctl monitors to avoid accidentally *showing* the overlay when
-          it is already hidden (e.g. after the toggle script's own window.move).
-        """
-        try:
-            out = subprocess.run(
-                ["hyprctl", "clients", "-j"],
-                capture_output=True, text=True, timeout=2.0, check=False,
-                stdin=subprocess.DEVNULL,
-            )
-            if out.returncode != 0 or not out.stdout.strip():
-                return
-            clients = json.loads(out.stdout)
-        except Exception:
-            return
-        addr = ""
-        ws_name = ""
-        for c in clients:
-            if c.get("class") == APP_ID:
-                ws_name = c.get("workspace", {}).get("name", "")
-                addr = c.get("address", "")
-                break
-        if not addr:
-            return
-        if ws_name.startswith("special:"):
-            # Already in the special workspace. Only call toggle_special when
-            # the overlay is actually visible; if it is already hidden there is
-            # nothing to do (and calling toggle_special would wrongly show it).
-            try:
-                mon = subprocess.run(
-                    ["hyprctl", "monitors", "-j"],
-                    capture_output=True, text=True, timeout=2.0, check=False,
-                    stdin=subprocess.DEVNULL,
-                )
-                if mon.returncode != 0 or not mon.stdout.strip():
-                    return
-                monitors = json.loads(mon.stdout)
-            except Exception:
-                return
-            visible = any(
-                m.get("specialWorkspace", {}).get("name") == "special:taskmanager"
-                for m in monitors
-            )
-            if not visible:
-                return
-            try:
-                subprocess.run(
-                    [
-                        "hyprctl", "eval",
-                        'hl.dispatch(hl.dsp.workspace.toggle_special("taskmanager"))',
-                    ],
-                    capture_output=True, timeout=2.0, check=False,
-                    stdin=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
-        else:
-            # On a regular workspace: move silently to special:taskmanager.
-            try:
-                subprocess.run(
-                    [
-                        "hyprctl", "eval",
-                        f'hl.dispatch(hl.dsp.window.move({{ workspace = "special:taskmanager",'
-                        f' follow = false, window = "address:{addr}" }})',
-                    ],
-                    capture_output=True, timeout=2.0, check=False,
-                    stdin=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
+    gpu_usage = read_gpu_usage()
+    gpu_temp = read_gpu_temp()
+    cpu_temp = read_cpu_temp()
+    mem = read_mem_usage()
+    uptime = read_uptime()
+    fan_left, fan_right = read_fan_speeds()
 
-    # ── Expand / collapse ─────────────────────────
+    prev_total = state.get("prev_total_jiffies")
+    prev_proc_raw = state.get("prev_proc", {})
+    prev_proc: dict[str, int] = {}
+    if isinstance(prev_proc_raw, dict):
+        for key, val in prev_proc_raw.items():
+            if isinstance(val, int):
+                prev_proc[str(key)] = val
 
-    def _apply_window_geometry(self, expanded: bool) -> None:
-        w, h = expanded_monitor_size() if expanded else quarter_monitor_size()
-        self.set_default_size(w, h)
-
-    def _toggle_processes(self, *_args) -> None:
-        self._expanded = not self._expanded
-        if self._expanded:
-            overall, cores = read_proc_stat()
-            self._refresh_procs(overall, cores)
-            self._root.append(self._process_box)
-            self.expand_btn.set_label("Processes \u25b4")
-        else:
-            self._root.remove(self._process_box)
-            self.expand_btn.set_label("Processes \u25be")
-        self._apply_window_geometry(self._expanded)
-
-    # ── Settings callbacks ────────────────────────
-
-    def _on_p_start_compact(self, btn: Gtk.CheckButton) -> None:
-        self._prefs["start_compact"] = btn.get_active()
-        save_prefs(self._prefs)
-
-    def _on_p_remember(self, btn: Gtk.CheckButton) -> None:
-        self._prefs["remember_expand"] = btn.get_active()
-        save_prefs(self._prefs)
-
-    def _on_p_start_hidden(self, btn: Gtk.CheckButton) -> None:
-        self._prefs["start_hidden"] = btn.get_active()
-        save_prefs(self._prefs)
-
-    def _on_p_refresh(self, dropdown: Gtk.DropDown, _pspec) -> None:
-        ms_values = [500, 1000, 2000, 5000]
-        idx = dropdown.get_selected()
-        ms = ms_values[idx] if 0 <= idx < len(ms_values) else 1000
-        self._prefs["refresh_ms"] = ms
-        save_prefs(self._prefs)
-        if self._tick_id:
-            GLib.source_remove(self._tick_id)
-        self._tick_id = GLib.timeout_add(ms, self._tick)
-
-    def _on_p_autostart(self, btn: Gtk.CheckButton) -> None:
-        want = btn.get_active()
-        err = _set_autostart(want)
-        if err:
-            btn.handler_block_by_func(self._on_p_autostart)
-            btn.set_active(not want)
-            btn.handler_unblock_by_func(self._on_p_autostart)
-            self._alert("Autostart failed", err)
-
-    # ── Main tick ─────────────────────────────────
-
-    def _tick(self) -> bool:
-        try:
-            overall, cores = read_proc_stat()
-            self._refresh_cpu(overall, cores)
-            self._refresh_gpu()
-            self._refresh_ram()
-            self._refresh_uptime()
-            self._refresh_temp()
-            self._refresh_procs(overall, cores)
-            self._schedule_fan()
-        except Exception:
-            pass
-        return True
-
-    def _refresh_cpu(
-        self,
-        overall: tuple[int, int] | None,
-        cores: dict[int, tuple[int, int]],
-    ) -> None:
-        if overall is None:
-            return
-        pct = cpu_pct(self._prev_overall, overall)
-        self.cpu_value.set_text(f"{pct:.0f}%")
-        self.cpu_bar.set_fraction(pct / 100.0)
-        ids = sorted(cores)
-        self._ensure_core_bars(ids)
-        for i, idx in enumerate(ids):
-            cur = cores[idx]
-            prev = self._prev_cores.get(idx)
-            core_pct = cpu_pct(prev, cur)
-            self._core_bars[i].set_fraction(core_pct / 100.0)
-            self._core_bars[i].set_tooltip_text(f"cpu{idx}  {core_pct:.0f}%")
-        self._prev_overall = overall
-        self._prev_cores = cores
-
-    def _refresh_gpu(self) -> None:
-        usage = read_gpu_usage()
-        if usage is None:
-            self.gpu_value.set_text(EM_DASH)
-            self.gpu_bar.set_fraction(0.0)
-        else:
-            self.gpu_value.set_text(f"{usage:.0f}%")
-            self.gpu_bar.set_fraction(usage / 100.0)
-        temp = read_gpu_temp()
-        self.gpu_temp_label.set_text(
-            EM_DASH if temp is None else f"{temp:.0f}\u00b0C"
-        )
-
-    def _refresh_ram(self) -> None:
-        mem = read_mem_usage()
-        if mem is None:
-            self.ram_value.set_text(EM_DASH)
-            self.ram_bar.set_fraction(0.0)
-            self.ram_detail_label.set_text(EM_DASH)
-            return
-        used_kib, total_kib, pct = mem
-        self.ram_value.set_text(f"{pct:.0f}%")
-        self.ram_bar.set_fraction(pct / 100.0)
-        self.ram_detail_label.set_text(fmt_mem_gib_pair(used_kib, total_kib))
-
-    def _refresh_uptime(self) -> None:
-        uptime = read_uptime()
-        self.uptime_label.set_text(
-            EM_DASH if uptime is None else fmt_uptime(uptime)
-        )
-
-    def _refresh_temp(self) -> None:
-        temp = read_cpu_temp()
-        self.cpu_temp_label.set_text(
-            EM_DASH if temp is None else f"{temp:.0f}\u00b0C"
-        )
-
-    def _ensure_core_bars(self, ids: list[int]) -> None:
-        if ids == self._core_ids and len(self._core_bars) == len(ids):
-            return
-        if hasattr(self.core_flow, "remove_all"):
-            self.core_flow.remove_all()
-        else:
-            child = self.core_flow.get_first_child()
-            while child is not None:
-                nxt = child.get_next_sibling()
-                self.core_flow.remove(child)
-                child = nxt
-        self._core_bars = []
-        self._core_ids = list(ids)
-        for idx in ids:
-            cell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            lab = Gtk.Label(label=str(idx), xalign=1)
-            lab.set_width_chars(2)
-            _add_css_class(lab, "dim")
-            bar = Gtk.ProgressBar()
-            _add_css_class(bar, "cpu-core")
-            bar.set_valign(Gtk.Align.CENTER)
-            bar.set_hexpand(True)
-            cell.append(lab)
-            cell.append(bar)
-            self.core_flow.insert(cell, -1)
-            self._core_bars.append(bar)
-
-    def _apply_fan(self, left: int | None, right: int | None) -> bool:
-        try:
-            self.fan_left_bar.set_fraction(fan_meter_fraction(left))
-            self.fan_left_val.set_text(fmt_fan_meter(left))
-            self.fan_right_bar.set_fraction(fan_meter_fraction(right))
-            self.fan_right_val.set_text(fmt_fan_meter(right))
-        except Exception:
-            pass
-        self._fan_busy = False
-        return False
-
-    def _fan_worker(self) -> None:
-        try:
-            left, right = read_fan_speeds()
-        except Exception:
-            left, right = None, None
-        GLib.idle_add(self._apply_fan, left, right)
-
-    def _schedule_fan(self) -> None:
-        if self._fan_busy:
-            return
-        self._fan_busy = True
-        thread = threading.Thread(target=self._fan_worker, name="fan-rpm", daemon=True)
-        thread.start()
-
-    def _refresh_procs(
-        self,
-        overall: tuple[int, int] | None,
-        cores: dict[int, tuple[int, int]],
-    ) -> None:
-        if overall is None:
-            return
+    processes = []
+    if overall is not None:
         total_jiffies = overall[0] + overall[1]
         ncpu = max(1, len(cores))
-        prev_total = self._prev_total_jiffies
-        d_total = (total_jiffies - prev_total) if prev_total is not None else 0
-        selected = self._selected_row()
-        selected_pid = selected[0] if selected else None
-
-        live: set[int] = set()
-        seen_keys: set[tuple[int, int]] = set()
+        d_total = (total_jiffies - prev_total) if isinstance(prev_total, int) else 0
+        next_proc: dict[str, int] = {}
         for pid, name, jiffies, rss, starttime in iter_processes():
-            live.add(pid)
-            key = (pid, starttime)
-            seen_keys.add(key)
+            key = f"{pid}:{starttime}"
             cpu = 0.0
-            prev = self._prev_proc.get(key)
+            prev = prev_proc.get(key)
             if prev is not None and d_total > 0:
                 cpu = max(0.0, 100.0 * (jiffies - prev) / d_total * ncpu)
-            self._prev_proc[key] = jiffies
-            cpu_txt = f"{cpu:.1f}"
-            rss_txt = fmt_bytes(rss)
-            tree_iter = self._row_iters.get(pid)
-            if tree_iter is None:
-                tree_iter = self.store.append(
-                    [name, pid, cpu, cpu_txt, rss, rss_txt]
-                )
-                self._row_iters[pid] = tree_iter
-            else:
-                self.store.set(
-                    tree_iter,
-                    COL_NAME, name, COL_PID, pid,
-                    COL_CPU, cpu, COL_CPU_TXT, cpu_txt,
-                    COL_RSS, rss, COL_RSS_TXT, rss_txt,
-                )
+            next_proc[key] = jiffies
+            processes.append(
+                {
+                    "pid": pid,
+                    "name": name,
+                    "cpu": round(cpu, 1),
+                    "cpu_txt": f"{cpu:.1f}",
+                    "rss": rss,
+                    "rss_txt": fmt_bytes(rss),
+                    "starttime": starttime,
+                }
+            )
+        processes.sort(key=lambda row: (-row["cpu"], -row["rss"], row["name"].lower()))
+        state["prev_total_jiffies"] = total_jiffies
+        state["prev_proc"] = next_proc
+    else:
+        state["prev_total_jiffies"] = None
+        state["prev_proc"] = {}
 
-        for pid in list(self._row_iters):
-            if pid not in live:
-                self.store.remove(self._row_iters[pid])
-                del self._row_iters[pid]
-        for key in list(self._prev_proc):
-            if key not in seen_keys:
-                del self._prev_proc[key]
+    if overall is not None:
+        state["prev_overall"] = [overall[0], overall[1]]
+        state["prev_cores"] = {str(k): [v[0], v[1]] for k, v in cores.items()}
+    save_stats_state(state)
 
-        self._prev_total_jiffies = total_jiffies
-        if selected_pid is not None and selected_pid in self._row_iters:
-            try:
-                path = self.store.get_path(self._row_iters[selected_pid])
-                fpath = self.filtered.convert_child_path_to_path(path)
-                if fpath is not None:
-                    spath = self.sorted.convert_child_path_to_path(fpath)
-                    if spath is not None:
-                        self.tree.get_selection().select_path(spath)
-            except Exception:
-                pass
+    ram_block = None
+    if mem is not None:
+        used_kib, total_kib, pct = mem
+        ram_block = {
+            "pct": round(pct, 1),
+            "detail": fmt_mem_gib_pair(used_kib, total_kib),
+        }
 
-    # ── Process selection / actions ──────────────
+    def fan_block(rpm: int | None) -> dict:
+        return {
+            "rpm": rpm,
+            "fraction": fan_meter_fraction(rpm),
+            "text": fmt_fan_meter(rpm),
+        }
 
-    def _on_search(self, entry: Gtk.Entry) -> None:
-        self._filter_text = (entry.get_text() or "").strip().lower()
-        self.filtered.refilter()
+    return {
+        "version": APP_VERSION,
+        "cpu": {
+            "pct": round(cpu_pct_val, 1),
+            "temp": None if cpu_temp is None else round(cpu_temp, 1),
+            "cores": core_rows,
+        },
+        "gpu": {
+            "pct": None if gpu_usage is None else round(gpu_usage, 1),
+            "temp": None if gpu_temp is None else round(gpu_temp, 1),
+        },
+        "ram": ram_block,
+        "uptime": None if uptime is None else fmt_uptime(uptime),
+        "fans": {"left": fan_block(fan_left), "right": fan_block(fan_right)},
+        "processes": processes,
+    }
 
-    def _row_visible(self, model, tree_iter, _data=None) -> bool:
-        needle = self._filter_text
-        if not needle:
-            return True
-        name = str(model.get_value(tree_iter, COL_NAME) or "").lower()
-        pid = str(model.get_value(tree_iter, COL_PID))
-        return needle in name or needle in pid
 
-    def _selected_row(self) -> tuple[int, str, int | None] | None:
-        if not self._expanded:
-            return None
-        model, tree_iter = self.tree.get_selection().get_selected()
-        if tree_iter is None:
-            return None
-        pid = int(model.get_value(tree_iter, COL_PID))
-        name = str(model.get_value(tree_iter, COL_NAME))
-        start = None
+def cmd_snapshot() -> int:
+    print(json.dumps(build_snapshot(), separators=(",", ":")))
+    return 0
+
+
+def cmd_kill(pid: int) -> int:
+    ok, err = kill_process(pid)
+    if ok:
+        return 0
+    print(err, file=sys.stderr)
+    return 1
+
+
+def cmd_prefs_get() -> int:
+    print(json.dumps(load_prefs(), indent=2))
+    return 0
+
+
+def cmd_prefs_set(key: str, value: str) -> int:
+    prefs = load_prefs()
+    if key not in DEFAULT_PREFS:
+        print(f"Unknown pref: {key}", file=sys.stderr)
+        return 1
+    default = DEFAULT_PREFS[key]
+    if isinstance(default, bool):
+        prefs[key] = value.lower() in ("1", "true", "yes", "on")
+    elif isinstance(default, int):
         try:
-            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
-                parsed = _comm_from_stat(fh.read())
-            if parsed and len(parsed[1]) >= 20:
-                start = int(parsed[1][19])
-        except (OSError, ValueError):
-            start = None
-        return pid, name, start
-
-    def _on_sel(self, *_args) -> None:
-        self.end_btn.set_sensitive(self._selected_row() is not None)
-
-    def _on_row_activated(self, *_args) -> None:
-        self._on_end_clicked()
-
-    def _on_end_clicked(self, *_args) -> None:
-        row = self._selected_row()
-        if row is None:
-            return
-        pid, name, start = row
-        if pid <= 1 or pid == os.getpid():
-            self._alert("Cannot end this process", f"{name} (PID {pid}) is protected.")
-            return
-        ConfirmDialog(
-            self,
-            "End process?",
-            f"Send SIGTERM to {name} (PID {pid})?",
-            "End process",
-            lambda ok, p=pid, n=name, st=start: self._do_term(p, n, st) if ok else None,
-        ).present()
-
-    def _alert(self, heading: str, body: str) -> None:
-        ConfirmDialog(self, heading, body, "OK", lambda _ok: None).present()
-
-    def _do_term(self, pid: int, name: str, start: int | None) -> None:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except PermissionError:
-            self._alert("Permission denied", f"Cannot send SIGTERM to {name} (PID {pid}).")
-            return
-        except OSError as exc:
-            self._alert("Could not end process", f"{name} (PID {pid}): {exc}")
-            return
-        GLib.timeout_add(2000, self._check_after_term, pid, name, start)
-
-    def _check_after_term(self, pid: int, name: str, start: int | None) -> bool:
-        if not pid_alive(pid, start):
-            return False
-        ConfirmDialog(
-            self,
-            "Process still running",
-            f"{name} (PID {pid}) is still alive. Send SIGKILL?",
-            "Kill process",
-            lambda ok, p=pid, n=name, st=start: self._do_kill(p, n, st) if ok else None,
-        ).present()
-        return False
-
-    def _do_kill(self, pid: int, name: str, start: int | None) -> None:
-        if not pid_alive(pid, start):
-            return
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except PermissionError:
-            self._alert("Permission denied", f"Cannot send SIGKILL to {name} (PID {pid}).")
-        except OSError as exc:
-            self._alert("Could not kill process", f"{name} (PID {pid}): {exc}")
+            prefs[key] = int(value)
+        except ValueError:
+            print(f"Invalid integer for {key}", file=sys.stderr)
+            return 1
+    else:
+        prefs[key] = value
+    save_prefs(prefs)
+    return 0
 
 
-# ──────────────────────────────────────────────
-# Application
-# ──────────────────────────────────────────────
-
-class TaskManagerApp(Gtk.Application):
-    def __init__(self) -> None:
-        flags = getattr(Gio.ApplicationFlags, "DEFAULT_FLAGS", None)
-        if flags is None:
-            flags = Gio.ApplicationFlags.FLAGS_NONE
-        super().__init__(application_id=APP_ID, flags=flags)
-        self._window: TaskManagerWindow | None = None
-        self._theme_monitors: list[Gio.FileMonitor] = []
-
-    def do_startup(self) -> None:
-        Gtk.Application.do_startup(self)
-        apply_theme()
-        self._theme_monitors = watch_theme_dir(apply_theme)
-
-    def do_shutdown(self) -> None:
-        for monitor in self._theme_monitors:
-            try:
-                monitor.cancel()
-            except Exception:
-                pass
-        self._theme_monitors = []
-        Gtk.Application.do_shutdown(self)
-
-    def do_activate(self) -> None:
-        if self._window is None:
-            self._window = TaskManagerWindow(application=self)
-        self._window.present()
-        try:
-            self._window.unmaximize()
-        except Exception:
-            pass
+def cmd_autostart_get() -> int:
+    print("true" if _read_autostart_enabled() else "false")
+    return 0
 
 
-def main() -> int:
-    app = TaskManagerApp()
-    return app.run(sys.argv)
+def cmd_autostart_set(value: str) -> int:
+    enabled = value.lower() in ("1", "true", "yes", "on")
+    err = _set_autostart(enabled)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Omarchy Task Manager stats backend")
+    parser.add_argument("--version", action="version", version=APP_VERSION)
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("snapshot", help="Emit JSON stats snapshot")
+    kill_p = sub.add_parser("kill", help="Terminate a process (SIGTERM then SIGKILL)")
+    kill_p.add_argument("pid", type=int)
+
+    sub.add_parser("prefs-get", help="Print prefs.json")
+    prefs_set = sub.add_parser("prefs-set", help="Update one prefs.json key")
+    prefs_set.add_argument("key")
+    prefs_set.add_argument("value")
+
+    sub.add_parser("autostart-get", help="Print autostart.lua enabled state")
+    autostart_set = sub.add_parser("autostart-set", help="Enable/disable Hyprland autostart block")
+    autostart_set.add_argument("value")
+
+    args = parser.parse_args(argv)
+    if args.command == "snapshot":
+        return cmd_snapshot()
+    if args.command == "kill":
+        return cmd_kill(args.pid)
+    if args.command == "prefs-get":
+        return cmd_prefs_get()
+    if args.command == "prefs-set":
+        return cmd_prefs_set(args.key, args.value)
+    if args.command == "autostart-get":
+        return cmd_autostart_get()
+    if args.command == "autostart-set":
+        return cmd_autostart_set(args.value)
+
+    parser.print_help()
+    return 2
 
 
 if __name__ == "__main__":

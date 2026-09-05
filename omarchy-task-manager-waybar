@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Waybar exec for the Task Manager icon.
-# Outputs JSON for waybar: icon, tooltip, and a CSS class when the app is running.
+# Outputs JSON: icon, tooltip, and a CSS class when the panel is open.
 
-CLASS="art.sw.omarchy.TaskManager"
+PLUGIN_ID="sw.art.task-manager"
+OPEN="false"
 
-if hyprctl clients -j 2>/dev/null \
-   | jq -e --arg c "$CLASS" 'any(.[]; .class == $c)' >/dev/null 2>&1; then
-    printf '{"text":"󰓅","tooltip":"Task Manager (running)","class":"running"}\n'
+if command -v omarchy-shell >/dev/null 2>&1; then
+  OPEN="$(omarchy-shell -q "${PLUGIN_ID}" opened 2>/dev/null || echo false)"
+fi
+
+if [[ "$OPEN" == "true" ]]; then
+  printf '{"text":"󰓅","tooltip":"Task Manager (open)","class":"running"}\n'
 else
-    printf '{"text":"󰓅","tooltip":"Task Manager"}\n'
+  printf '{"text":"󰓅","tooltip":"Task Manager"}\n'
 fi

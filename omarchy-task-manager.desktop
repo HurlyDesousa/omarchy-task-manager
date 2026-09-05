@@ -1,11 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Task Manager
-Comment=CPU, temperature, fan monitoring, and processes for Omarchy
-Exec=omarchy-task-manager
+Comment=Omarchy system stats and process manager
+Exec=omarchy-task-manager-toggle
 Icon=utilities-system-monitor
 Terminal=false
-StartupNotify=true
-StartupWMClass=art.sw.omarchy.TaskManager
 Categories=System;Monitor;
-Keywords=cpu;process;fan;monitor;htop;system;

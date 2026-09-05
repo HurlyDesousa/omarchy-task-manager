@@ -1,29 +1,20 @@
 #!/usr/bin/env bash
-# Toggle Task Manager window: launch if not running; hide to or show from
-# special:taskmanager using the Hyprland Lua eval API.
-# Calls must be wrapped in hl.dispatch() so Hyprland actually executes them
-# (bare hl.dsp.* calls return HL.Dispatcher objects and are no-ops).
-# App ID: art.sw.omarchy.TaskManager.
+# Toggle the Task Manager KeyboardPanel via Omarchy shell IPC.
+set -euo pipefail
 
-CLASS="art.sw.omarchy.TaskManager"
-BIN="${HOME}/.local/bin/omarchy-task-manager"
+PLUGIN_ID="sw.art.task-manager"
 
-CLIENT=$(hyprctl clients -j 2>/dev/null \
-  | jq -c --arg c "$CLASS" '.[] | select(.class == $c)' 2>/dev/null \
-  | head -1)
-
-if [[ -z "$CLIENT" ]]; then
-    setsid "$BIN" </dev/null >/dev/null 2>&1 &
-    exit 0
+if command -v omarchy-shell >/dev/null 2>&1; then
+  omarchy-shell -q shell toggle "${PLUGIN_ID}" '{}' 2>/dev/null \
+    || omarchy-shell shell toggle "${PLUGIN_ID}" '{}'
+  exit 0
 fi
 
-ADDRESS=$(printf '%s' "$CLIENT" | jq -r '.address')
-WS_NAME=$(printf '%s' "$CLIENT" | jq -r '.workspace.name')
-
-if [[ "$WS_NAME" == special:* ]]; then
-    # Window is hidden in the special workspace; bring it back into view.
-    hyprctl eval 'hl.dispatch(hl.dsp.workspace.toggle_special("taskmanager"))' >/dev/null 2>&1
-else
-    # Move window to special:taskmanager (hide), without warping the display.
-    hyprctl eval "hl.dispatch(hl.dsp.window.move({ workspace = \"special:taskmanager\", follow = false, window = \"address:${ADDRESS}\" }))" >/dev/null 2>&1
+# Fallback when omarchy-shell is unavailable.
+if command -v qs >/dev/null 2>&1 && [[ -n "${OMARCHY_PATH:-}" ]]; then
+  qs ipc -n -p "${OMARCHY_PATH}/shell" call -- "${PLUGIN_ID}" toggle
+  exit 0
 fi
+
+echo "omarchy-shell is not available; open Task Manager from the bar icon." >&2
+exit 1
