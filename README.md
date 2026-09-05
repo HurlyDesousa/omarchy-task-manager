@@ -57,7 +57,26 @@ Stats/process data comes from the Python backend:
 ```bash
 omarchy-task-manager snapshot   # JSON to stdout
 omarchy-task-manager kill PID
+omarchy-task-manager ai-usage   # aggregated Cursor/Codex/Grok usage JSON
+omarchy-task-manager ai-usage-update
 ```
+
+## AI tray (launchers + usage)
+
+Four Quickshell plugins install to `~/.config/omarchy/plugins/` and are placed on **`bar.layout.right`** immediately **left of the system-icon cluster** (`omarchy.tray` → agents → bluetooth → network → audio → monitor → `omarchy.power`). Order: cursor → pi-local → grok → ai-usage. `install.sh` migrates any prior `center` or misplaced `right` entries on re-run (idempotent).
+
+| Plugin | Bar icon | Action |
+|---|---|---|
+| `sw.art.cursor` | 󱃸 | Launch Cursor (`~/.local/bin/cursor`, fallback `cursor` on PATH) |
+| `sw.art.pi-local` | π | Terminal: `pi --provider llama-local`; green dot when `http://127.0.0.1:8080/health` is 200 |
+| `sw.art.grok` | 󰬬 | Terminal: local `grok` CLI (mise shim; no xAI API calls from the widget) |
+| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Codex + Grok/xAI token usage (excludes local pi) |
+
+Terminal pattern: `xdg-terminal-exec bash --login -c 'CMD; exec $SHELL'` with ghostty/kitty fallbacks.
+
+The usage panel reads Omarchy agent-usage JSON from `~/.local/state/omarchy/agents/usage/` and refreshes via `omarchy agent usage-update` (Codex) plus lightweight local collectors for Cursor and Grok that fail soft — no Grok Bot API calls from the panel.
+
+**Maintainers:** `ai-usage` and `ai-usage-update` are part of the shared `omarchy-task-manager` backend (same binary as Task Manager stats). When bumping pkgrel for TM, kbd-backlight, or fan fixes, keep these subcommands and the AI tray plugin installs in `PKGBUILD` / `install.sh` — the usage panel depends on them.
 
 ## What it shows
 
@@ -94,9 +113,15 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-25** — Permanent mainline land: AI tray plugins + `ai-usage` / `ai-usage-update` CLI on shared backend (do not drop on future pkgrel bumps).
+
 **0.5.5-24** — Keyboard backlight panel: replace clipped On/Off text with Enabled toggle switch (Task Manager SettingToggle pattern).
 
+**0.5.5-23** — AI usage panel: auto-refresh on open, local cursor/grok collectors, clearer Codex limits messaging.
+
 **0.5.5-22** — Rename monitor fan meter labels from L/R to Fan L / Fan R.
+
+**0.5.5-21** — AI tray on `bar.layout.right` immediately left of system icons (`omarchy.tray` cluster): cursor → pi-local → grok → ai-usage. Migrates center/right on re-install.
 
 **0.5.5-20** — Show CPU/GPU/RAM and process CPU percentages as whole numbers (no decimals).
 
