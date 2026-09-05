@@ -31,7 +31,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.5-6"
+APP_VERSION = "0.5.5-7"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -778,6 +778,36 @@ def fmt_mem_gib_pair(used_kib: int, total_kib: int) -> str:
 
 
 # ──────────────────────────────────────────────
+# Uptime  (/proc/uptime)
+# ──────────────────────────────────────────────
+
+def read_uptime() -> float | None:
+    """Seconds since boot from /proc/uptime, or None."""
+    try:
+        with open("/proc/uptime", encoding="utf-8") as fh:
+            return float(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def fmt_uptime(seconds: float) -> str:
+    """Compact uptime, e.g. '3d 2h 12m', '3h 12m', '45m'."""
+    total = max(0, int(seconds))
+    days = total // 86400
+    rem = total % 86400
+    hours = rem // 3600
+    minutes = (rem % 3600) // 60
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes or not parts:
+        parts.append(f"{minutes}m")
+    return " ".join(parts)
+
+
+# ──────────────────────────────────────────────
 # Fan helpers
 # ──────────────────────────────────────────────
 
@@ -1259,8 +1289,17 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         fan_r_box.append(fan_r_key)
         fan_r_box.append(self.fan_right)
 
+        uptime_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        uptime_key = Gtk.Label(label="Up", xalign=0)
+        _add_css_class(uptime_key, "dim")
+        self.uptime_label = Gtk.Label(label=EM_DASH, xalign=0)
+        _add_css_class(self.uptime_label, "stat-value")
+        uptime_box.append(uptime_key)
+        uptime_box.append(self.uptime_label)
+
         meta.append(fan_l_box)
         meta.append(fan_r_box)
+        meta.append(uptime_box)
 
         # Fan profile buttons
         profile_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1844,6 +1883,7 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
             self._refresh_cpu(overall, cores)
             self._refresh_gpu()
             self._refresh_ram()
+            self._refresh_uptime()
             self._refresh_temp()
             self._refresh_procs(overall, cores)
             self._schedule_fan()
@@ -1896,6 +1936,12 @@ class TaskManagerWindow(Gtk.ApplicationWindow):
         self.ram_value.set_text(f"{pct:.0f}%")
         self.ram_bar.set_fraction(pct / 100.0)
         self.ram_detail_label.set_text(fmt_mem_gib_pair(used_kib, total_kib))
+
+    def _refresh_uptime(self) -> None:
+        uptime = read_uptime()
+        self.uptime_label.set_text(
+            EM_DASH if uptime is None else fmt_uptime(uptime)
+        )
 
     def _refresh_temp(self) -> None:
         temp = read_cpu_temp()
