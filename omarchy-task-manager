@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-28"
+APP_VERSION = "0.5.5-29"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -806,6 +806,51 @@ def _usage_read_record(agent_id: str) -> dict | None:
     return max(candidates, key=_usage_record_score)
 
 
+def _usage_sanitize_grokbot_text(text: str) -> str:
+    """Rewrite legacy Codex-era user-facing strings for the Grok Bot panel."""
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+    out = raw
+    replacements = (
+        ("Codex limits unavailable", "Grok Bot limits unavailable"),
+        ("Codex usage unavailable", "Grok Bot usage unavailable"),
+        ("Codex usage not loaded", "Grok Bot usage not loaded"),
+        ("codex limits unavailable", "Grok Bot limits unavailable"),
+        ("codex usage unavailable", "Grok Bot usage unavailable"),
+        ("codex usage not loaded", "Grok Bot usage not loaded"),
+        ("`codex login`", "Grok Bot sign-in"),
+        ("codex login", "Grok Bot sign-in"),
+        ("usage-update codex", "usage-update grokbot"),
+        ("agent usage-update codex", "agent usage-update grokbot"),
+        ("omarchy-agent-usage-codex", "omarchy-agent-usage-grokbot"),
+    )
+    for old, new in replacements:
+        out = out.replace(old, new)
+    out = re.sub(r"\bCodex\b", "Grok Bot", out)
+    return out
+
+
+def _usage_sanitize_grokbot_record(record: dict) -> dict:
+    sanitized = dict(record)
+    for field in ("usageStatusText", "authHelpText", "name"):
+        if field in sanitized and sanitized[field] is not None:
+            sanitized[field] = _usage_sanitize_grokbot_text(str(sanitized[field]))
+    limits = sanitized.get("limits")
+    if isinstance(limits, list):
+        cleaned_limits: list[dict] = []
+        for entry in limits:
+            if not isinstance(entry, dict):
+                continue
+            item = dict(entry)
+            for key in ("label", "title", "caption"):
+                if key in item and item[key] is not None:
+                    item[key] = _usage_sanitize_grokbot_text(str(item[key]))
+            cleaned_limits.append(item)
+        sanitized["limits"] = cleaned_limits
+    return sanitized
+
+
 def _usage_normalize_record(agent_id: str, record: dict, legacy_id: str | None = None) -> dict:
     normalized = dict(record)
     normalized["id"] = agent_id
@@ -815,6 +860,10 @@ def _usage_normalize_record(agent_id: str, record: dict, legacy_id: str | None =
         normalized["name"] = AGENT_USAGE_NAMES.get(agent_id, agent_id)
     elif agent_id == "grok" and name in ("Grok", "Grok Build"):
         normalized["name"] = AGENT_USAGE_NAMES["grok"]
+    if agent_id == "grokbot" or legacy_id == "codex" or str(record.get("id") or "") == "codex":
+        normalized = _usage_sanitize_grokbot_record(normalized)
+        normalized["id"] = agent_id
+        normalized["name"] = AGENT_USAGE_NAMES.get(agent_id, agent_id)
     return normalized
 
 
@@ -898,11 +947,16 @@ def _usage_run_collector(agent_id: str) -> tuple[bool, str]:
         if not isinstance(parsed, dict):
             errors.append(f"{collector.name}: unexpected record type")
             continue
+        legacy_id = "codex" if str(parsed.get("id") or "") == "codex" else None
+        parsed = _usage_normalize_record(agent_id, parsed, legacy_id=legacy_id)
         _usage_write_record(agent_id, parsed)
         return True, ""
     if not _usage_collector_paths(agent_id):
         return False, f"omarchy-agent-usage-{agent_id} not found on PATH"
-    return False, errors[-1] if errors else f"omarchy-agent-usage-{agent_id} failed"
+    err = errors[-1] if errors else f"omarchy-agent-usage-{agent_id} failed"
+    if agent_id == "grokbot":
+        err = _usage_sanitize_grokbot_text(err)
+    return False, err
 
 
 def _usage_run_omarchy_update(agents: tuple[str, ...]) -> str:
@@ -1403,6 +1457,9 @@ def _usage_panel_limits(agent_id: str, limits: list[dict]) -> list[dict]:
 def _usage_normalize_auth_help(agent_id: str, record: dict) -> tuple[str, str]:
     usage_status = str(record.get("usageStatusText") or "").strip()
     auth_help = str(record.get("authHelpText") or "").strip()
+    if agent_id == "grokbot":
+        usage_status = _usage_sanitize_grokbot_text(usage_status)
+        auth_help = _usage_sanitize_grokbot_text(auth_help)
     if auth_help.lower() == "initialize":
         if agent_id == "grokbot":
             auth_help = (
@@ -1430,6 +1487,9 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
         status, help_text = USAGE_MISSING_HELP.get(
             agent_id, ("No usage data yet", "Open the panel again to collect usage.")
         )
+        if agent_id == "grokbot":
+            status = _usage_sanitize_grokbot_text(status)
+            help_text = _usage_sanitize_grokbot_text(help_text)
         return {
             "id": agent_id,
             "name": AGENT_USAGE_NAMES.get(agent_id, agent_id),
@@ -1489,7 +1549,7 @@ def cmd_ai_usage_update() -> int:
     if not grokbot_ok and _usage_read_record("grokbot") is None:
         record = _usage_base_record("grokbot")
         record["usageStatusText"] = "Grok Bot usage unavailable"
-        hint = grokbot_err or omarchy_err
+        hint = _usage_sanitize_grokbot_text(grokbot_err or omarchy_err or "")
         record["authHelpText"] = (
             "Sign in to Grok Bot on this laptop, then refresh "
             "(or `omarchy agent usage-update grokbot`)."
