@@ -318,7 +318,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-12"
+                            text: "Version 0.5.5-13"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -473,6 +473,7 @@ Panel {
                                         model: ["Name", "PID", "CPU %", "Memory"]
                                         delegate: Label {
                                             required property string modelData
+                                            required property int index
                                             width: index === 0 ? parent.width * 0.42
                                                 : index === 1 ? parent.width * 0.14
                                                 : index === 2 ? parent.width * 0.18

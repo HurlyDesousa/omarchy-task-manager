@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-APP_VERSION = "0.5.5-12"
+APP_VERSION = "0.5.5-13"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (

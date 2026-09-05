@@ -94,4 +94,6 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-13** — Fix process-table header Repeater `index` ReferenceError in Panel.qml.
+
 **0.5.5-12** — Weather-style KeyboardPanel popout; drops GTK window and `special:taskmanager` hide/show.
