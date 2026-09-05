@@ -224,7 +224,7 @@ Panel {
         owner: root
         bar: root.bar
         open: root.opened
-        contentWidth: 272
+        contentWidth: 300
         contentHeight: panelContent.implicitHeight
 
         Rectangle {
@@ -240,7 +240,7 @@ Panel {
                 spacing: 0
                 width: parent.width
 
-                // ── Header row: title + Enabled toggle + gear ─────────────
+                // ── Header row: title + on/off toggle + gear ────────────
                 RowLayout {
                     spacing: 8
                     Layout.fillWidth: true
@@ -259,7 +259,7 @@ Panel {
 
                     SettingToggle {
                         compact: true
-                        labelText: "Enabled"
+                        labelless: true
                         checked: root.kbdEnabled && root.brightness > 0
                         toggleHandler: function(v) {
                             if (v) {
@@ -487,15 +487,17 @@ Panel {
     }
 
     component SettingToggle: RowLayout {
-        property string labelText
+        property string labelText: ""
         property string detailText: ""
         property bool checked
         property var toggleHandler
         property bool compact: false
+        property bool labelless: false
         Layout.fillWidth: !compact
         spacing: compact ? 6 : 8
 
         ColumnLayout {
+            visible: !labelless
             Layout.fillWidth: !compact
             spacing: 2
 
