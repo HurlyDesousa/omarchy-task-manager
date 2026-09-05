@@ -30,7 +30,7 @@ except (ImportError, ValueError) as exc:
 APP_ID = "art.sw.omarchy.TaskManager"
 APP_TITLE = "Task Manager"
 # Keep in sync with PKGBUILD pkgver-pkgrel.
-APP_VERSION = "0.5.5-10"
+APP_VERSION = "0.5.5-11"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
