@@ -94,6 +94,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-18** — Align CPU/GPU/RAM percent column: shared 44px right-aligned value width on StatRow and RamStatRow.
+
 **0.5.5-16** — Settings view: right-align Start compact / Remember last state switches (labels left, toggles in a column on the right).
 
 **0.5.5-15** — Fix settings toggles for real: `prefs-get` now emits single-line JSON (Panel SplitParser was failing on pretty-printed output). Restore CPU/GPU StatRow layout; keep RAM-only overlap fix via `RamStatRow`.

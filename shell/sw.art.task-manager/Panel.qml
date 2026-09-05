@@ -318,7 +318,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-16"
+                            text: "Version 0.5.5-18"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -622,7 +622,9 @@ Panel {
         }
         Label {
             text: valueText
-            Layout.preferredWidth: Style.space(40)
+            Layout.preferredWidth: Style.space(44)
+            Layout.maximumWidth: Style.space(44)
+            horizontalAlignment: Text.AlignRight
             color: bar.foreground
             font.family: bar.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -662,6 +664,7 @@ Panel {
             text: valueText
             Layout.preferredWidth: Style.space(44)
             Layout.maximumWidth: Style.space(44)
+            Layout.leftMargin: Style.space(2)
             horizontalAlignment: Text.AlignRight
             color: bar.foreground
             font.family: bar.fontFamily
