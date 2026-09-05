@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "sw.art.task-manager",
   "name": "Task Manager",
-  "version": "0.5.5-11",
+  "version": "0.5.5-12",
   "author": "Toby Swart",
   "license": "MIT",
-  "description": "Omarchy bar icon for the GTK4 Task Manager — click to show or hide the window",
+  "description": "Omarchy bar icon — KeyboardPanel popout with CPU/GPU/RAM, fans, processes, and settings",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "Task Manager",
-    "description": "Show/hide the GTK4 Task Manager with a single click",
+    "description": "Open the Task Manager KeyboardPanel from the bar icon",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "center"
