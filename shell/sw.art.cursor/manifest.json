@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sw.art.cursor",
+  "name": "Cursor",
+  "version": "0.5.5-8",
+  "author": "Toby Swart",
+  "license": "MIT",
+  "description": "Bar launcher for the Cursor IDE — click to launch",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Cursor",
+    "description": "Click to launch Cursor IDE (~/.local/bin/cursor, fallback cursor on PATH)",
+    "category": "Launchers",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

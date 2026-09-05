@@ -32,6 +32,46 @@ makepkg -si
 
 Works on aarch64 and x86_64 (`arch=('any')`). No venv. No pip.
 
+## AI launcher bar plugins (v0.5.5-8)
+
+Three new `BarWidget + BarIconButton` plugins are installed by `install.sh` alongside the existing Task Manager and keyboard-backlight widgets. They are placed as a group immediately left of the clock in `bar.layout.center`.
+
+| Plugin id | Icon | Tooltip | Action |
+|---|---|---|---|
+| `sw.art.cursor` | `󱃸` | Cursor | Launch `~/.local/bin/cursor` (fallback: `cursor` on PATH) |
+| `sw.art.pi-local` | `π` | pi (local) · llama healthy ✓ / pi (local) | Open terminal: `pi --provider llama-local` in a login shell |
+| `sw.art.grok` | `󰬬` | Grok | Open terminal: `grok` in a login shell (mise shim) |
+
+### Terminal launch command
+
+Terminal-based plugins use the following priority order:
+
+```bash
+xdg-terminal-exec bash --login -c 'CMD; exec $SHELL'
+  || ghostty -e bash --login -c 'CMD; exec $SHELL'
+  || kitty bash --login -c 'CMD; exec $SHELL'
+```
+
+`bash --login` ensures mise shims and full user `$PATH` are available.  
+`exec $SHELL` keeps the terminal window open after the CLI exits.
+
+### sw.art.cursor
+
+Launches Cursor IDE as a detached GUI process.  Path resolution:
+
+1. `~/.local/bin/cursor` (Cursor's default install target)
+2. `cursor` on `$PATH`
+
+### sw.art.pi-local
+
+Opens a login-shell terminal running `pi --provider llama-local`.
+
+**Health indicator**: a small green dot (Catppuccin `#a6e3a1`) appears on the icon when `http://127.0.0.1:8080/health` returns HTTP 200 (llama-server live). The check runs at load and every 15 s using `curl --max-time 3`. No dot = llama-server absent or unreachable; the launcher still works.
+
+### sw.art.grok
+
+Opens a login-shell terminal running `grok` (user's local CLI via mise shim). Does **not** call xAI cloud APIs or inject API tokens — authentication is the user's responsibility inside the CLI session.
+
 ## Quickshell bar widget
 
 The `sw.art.task-manager` plugin ships in `shell/sw.art.task-manager/` and is installed to `~/.config/omarchy/plugins/sw.art.task-manager/`. `install.sh` places `{ "id": "sw.art.task-manager" }` into `~/.config/omarchy/shell.json` `bar.layout.center` directly after `omarchy.weather` (idempotent; never clobbers other entries).
