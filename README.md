@@ -1,6 +1,6 @@
 # omarchy-task-manager
 
-Native GTK4 task manager v5 for Omarchy: CPU/GPU stats, thermals, temp-driven fan curves, compact mode, settings, and a searchable process table.
+Native GTK4 task manager v5 for Omarchy: CPU/GPU/RAM stats, thermals, temp-driven fan curves, compact mode, settings, and a searchable process table.
 
 Application id: `art.sw.omarchy.TaskManager`
 
@@ -61,6 +61,7 @@ hyprctl eval 'hl.dsp.workspace.toggle_special("taskmanager")'
 - **CPU** % from `/proc/stat` (core count not hardcoded), per-core bars; **CPU temp** shown on the right of the CPU row (mirrors GPU layout)
 - **GPU** % from `/sys/class/devfreq/3d00000.gpu` `cur_freq / max_freq` (Snapdragon X Elite, `simple_ondemand` governor). Em-dash if absent.
 - **GPU temp**: max of `gpuss_0_thermal … gpuss_7_thermal` hwmon sensors (`temp1_input / 1000 °C`), shown on the right of the GPU row. Em-dash if absent.
+- **RAM** used/total from `/proc/meminfo` (`MemTotal`, `MemAvailable` → used = total − available): **%** and progress bar on the left, `used / total GiB` on the right (same row layout as CPU/GPU). Visible in compact mode.
 - **Fan L / Fan R** RPM via `x1e-ec-tool get-speed` (or `sudo -n`, or hwmon `fan*_input`)
 - **Fan profiles** — four one-click buttons with optional temp-driven curves (see below)
 - **Process table**: name, PID, CPU %, RSS — sortable, searchable; End process is SIGTERM then SIGKILL
