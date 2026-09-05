@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.task-manager",
   "name": "Task Manager",
-  "version": "0.5.5-7",
+  "version": "0.5.5-10",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Omarchy bar icon for the GTK4 Task Manager — click to show or hide the window",
