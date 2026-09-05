@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-APP_VERSION = "0.5.5-14"
+APP_VERSION = "0.5.5-15"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -650,7 +650,7 @@ def cmd_kill(pid: int) -> int:
 
 
 def cmd_prefs_get() -> int:
-    print(json.dumps(load_prefs(), indent=2))
+    print(json.dumps(load_prefs(), separators=(",", ":")))
     return 0
 
 
