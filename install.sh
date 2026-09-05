@@ -18,6 +18,18 @@ PLUGIN_SRC="${ROOT}/shell/${PLUGIN_ID}"
 KBD_PLUGIN_ID="sw.art.kbd-backlight"
 KBD_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${KBD_PLUGIN_ID}"
 KBD_PLUGIN_SRC="${ROOT}/shell/${KBD_PLUGIN_ID}"
+CURSOR_PLUGIN_ID="sw.art.cursor"
+CURSOR_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${CURSOR_PLUGIN_ID}"
+CURSOR_PLUGIN_SRC="${ROOT}/shell/${CURSOR_PLUGIN_ID}"
+PILOCAL_PLUGIN_ID="sw.art.pi-local"
+PILOCAL_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PILOCAL_PLUGIN_ID}"
+PILOCAL_PLUGIN_SRC="${ROOT}/shell/${PILOCAL_PLUGIN_ID}"
+GROK_PLUGIN_ID="sw.art.grok"
+GROK_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${GROK_PLUGIN_ID}"
+GROK_PLUGIN_SRC="${ROOT}/shell/${GROK_PLUGIN_ID}"
+AI_USAGE_PLUGIN_ID="sw.art.ai-usage"
+AI_USAGE_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${AI_USAGE_PLUGIN_ID}"
+AI_USAGE_PLUGIN_SRC="${ROOT}/shell/${AI_USAGE_PLUGIN_ID}"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python)
 
@@ -209,6 +221,105 @@ path.write_text(
 PY
 }
 
+# ── AI tray plugins (cursor / pi-local / grok / ai-usage) ─────────────────────
+# Launchers plus aggregated usage panel.  Patched into bar.layout.right
+# immediately left of the system-icon cluster (before omarchy.tray when present).
+# Migrates center or misplaced right entries (idempotent).
+
+install_ai_tray_plugins() {
+  local entries=(
+    "${CURSOR_PLUGIN_SRC}:${CURSOR_PLUGIN_DIR}:BarWidget.qml"
+    "${PILOCAL_PLUGIN_SRC}:${PILOCAL_PLUGIN_DIR}:BarWidget.qml"
+    "${GROK_PLUGIN_SRC}:${GROK_PLUGIN_DIR}:BarWidget.qml"
+    "${AI_USAGE_PLUGIN_SRC}:${AI_USAGE_PLUGIN_DIR}:BarWidget.qml,Panel.qml"
+  )
+  local entry
+  for entry in "${entries[@]}"; do
+    local src dir files
+    src="${entry%%:*}"; entry="${entry#*:}"
+    dir="${entry%%:*}"; files="${entry#*:}"
+    if [[ ! -d "${src}" ]]; then
+      echo "Warning: plugin source not found at ${src}"; continue
+    fi
+    mkdir -p "${dir}"
+    install -Dm644 "${src}/manifest.json" "${dir}/manifest.json"
+    local qml
+    IFS=',' read -ra qml_files <<< "${files}"
+    for qml in "${qml_files[@]}"; do
+      install -Dm644 "${src}/${qml}" "${dir}/${qml}"
+    done
+    echo "AI tray plugin: installed $(basename "${dir}") to ${dir}"
+  done
+}
+
+patch_shell_json_ai_tray() {
+  [[ -f "${SHELL_JSON}" ]] || {
+    echo "Note: ${SHELL_JSON} not found; skipping AI tray bar layout patch."
+    echo "      Run: omarchy plugin enable ${CURSOR_PLUGIN_ID}"
+    echo "           omarchy plugin enable ${PILOCAL_PLUGIN_ID}"
+    echo "           omarchy plugin enable ${GROK_PLUGIN_ID}"
+    echo "           omarchy plugin enable ${AI_USAGE_PLUGIN_ID}"
+    return 0
+  }
+
+  python3 - "${SHELL_JSON}" \
+      "${CURSOR_PLUGIN_ID}" "${PILOCAL_PLUGIN_ID}" "${GROK_PLUGIN_ID}" "${AI_USAGE_PLUGIN_ID}" <<'PY'
+import json, sys, pathlib
+
+path    = pathlib.Path(sys.argv[1])
+new_ids = sys.argv[2:]
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Warning: could not parse {path}: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+layout = data.setdefault("bar", {}).setdefault("layout", {})
+center = layout.setdefault("center", [])
+right  = layout.setdefault("right", [])
+
+migrated_center = [e.get("id") for e in center if e.get("id") in new_ids]
+if migrated_center:
+    center[:] = [e for e in center if e.get("id") not in new_ids]
+    print(f"shell.json: removed AI tray from center: {migrated_center}")
+
+migrated_right = [e.get("id") for e in right if e.get("id") in new_ids]
+right[:] = [e for e in right if e.get("id") not in new_ids]
+if migrated_right:
+    print(f"shell.json: relocated AI tray within right (was: {migrated_right})")
+
+def insert_before_system_cluster(entries):
+    ids = [e.get("id", "") for e in entries]
+    if "omarchy.tray" in ids:
+        return ids.index("omarchy.tray")
+    system_ids = {
+        "omarchy.agents", "agents",
+        "omarchy.bluetooth", "bluetooth",
+        "omarchy.network", "network",
+        "omarchy.audio", "audio",
+        "omarchy.monitor", "monitor",
+        "omarchy.power",
+    }
+    for i, eid in enumerate(ids):
+        if eid in system_ids:
+            return i
+    return 0
+
+insert_at = insert_before_system_cluster(right)
+entries = [{"id": pid} for pid in new_ids]
+right[insert_at:insert_at] = entries
+
+anchor = right[insert_at].get("id") if insert_at < len(right) else "end"
+print(f"shell.json: placed AI tray on bar.layout.right before {anchor}: {new_ids}")
+
+path.write_text(
+    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
 # ── Waybar integration (optional – skipped when waybar is not configured) ─────
 # Idempotently adds custom/omarchy-task-manager to ~/.config/waybar/config.jsonc
 # (near custom/weather in modules-center) and a margin rule to style.css.
@@ -296,6 +407,8 @@ install_quickshell_plugin
 patch_shell_json
 install_kbd_backlight_plugin
 patch_shell_json_kbd
+install_ai_tray_plugins
+patch_shell_json_ai_tray
 upsert_waybar_config
 upsert_waybar_style
 
@@ -310,3 +423,11 @@ echo "Keyboard backlight plugin: ${KBD_PLUGIN_DIR}"
 echo "  Bar icon placed immediately left of the clock."
 echo "  State file: ~/.local/state/omarchy/kbd-backlight"
 echo "  (or: omarchy plugin enable ${KBD_PLUGIN_ID})"
+echo "AI tray plugins:"
+echo "  ${CURSOR_PLUGIN_DIR}  (Cursor IDE)"
+echo "  ${PILOCAL_PLUGIN_DIR}  (pi --provider llama-local)"
+echo "  ${GROK_PLUGIN_DIR}  (grok CLI)"
+echo "  ${AI_USAGE_PLUGIN_DIR}  (Cursor/Codex/Grok token usage)"
+echo "  Bar icons on bar.layout.right before system cluster: cursor → pi-local → grok → ai-usage"
+echo "  Terminal launcher: xdg-terminal-exec (fallback: ghostty, kitty)"
+echo "  Usage refresh: omarchy-task-manager ai-usage-update"

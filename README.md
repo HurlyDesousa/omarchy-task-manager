@@ -57,7 +57,24 @@ Stats/process data comes from the Python backend:
 ```bash
 omarchy-task-manager snapshot   # JSON to stdout
 omarchy-task-manager kill PID
+omarchy-task-manager ai-usage   # aggregated Cursor/Codex/Grok usage JSON
+omarchy-task-manager ai-usage-update
 ```
+
+## AI tray (launchers + usage)
+
+Four Quickshell plugins install to `~/.config/omarchy/plugins/` and are placed on **`bar.layout.right`** immediately **left of the system-icon cluster** (`omarchy.tray` → agents → bluetooth → network → audio → monitor → `omarchy.power`). Order: cursor → pi-local → grok → ai-usage. `install.sh` migrates any prior `center` or misplaced `right` entries on re-run (idempotent).
+
+| Plugin | Bar icon | Action |
+|---|---|---|
+| `sw.art.cursor` | 󱃸 | Launch Cursor (`~/.local/bin/cursor`, fallback `cursor` on PATH) |
+| `sw.art.pi-local` | π | Terminal: `pi --provider llama-local`; green dot when `http://127.0.0.1:8080/health` is 200 |
+| `sw.art.grok` | 󰬬 | Terminal: local `grok` CLI (mise shim; no xAI API calls from the widget) |
+| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Codex + Grok/xAI token usage (excludes local pi) |
+
+Terminal pattern: `xdg-terminal-exec bash --login -c 'CMD; exec $SHELL'` with ghostty/kitty fallbacks.
+
+The usage panel reads Omarchy agent-usage JSON from `~/.local/state/omarchy/agents/usage/` and refreshes via `omarchy agent usage-update` (Codex) plus lightweight local collectors for Cursor and Grok that fail soft — no Grok Bot API calls from the panel.
 
 ## What it shows
 
@@ -93,6 +110,8 @@ Waybar is **not required**. The primary path is the Quickshell bar widget.
 If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next to `custom/weather`. Clicking it calls `omarchy-task-manager-toggle` (shell IPC). The icon shows a `running` CSS class while the panel is open.
 
 ## Version
+
+**0.5.5-21** — AI tray on `bar.layout.right` immediately left of system icons (`omarchy.tray` cluster): cursor → pi-local → grok → ai-usage. Migrates center/right on re-install.
 
 **0.5.5-20** — Show CPU/GPU/RAM and process CPU percentages as whole numbers (no decimals).
 
