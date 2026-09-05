@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.task-manager",
   "name": "Task Manager",
-  "version": "0.5.5-30",
+  "version": "0.5.5-31",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Omarchy bar icon — KeyboardPanel popout with CPU/GPU/RAM, fans, processes, and settings",

@@ -30,10 +30,7 @@ Panel {
     readonly property color mutedCaption: "#888888"
 
     function cursorSectionTitle(agent) {
-        var tier = agent && agent.tierLabel ? String(agent.tierLabel).trim() : ""
-        if (tier)
-            return "Included in " + tier
-        return "Included in Pro+"
+        return "Cursor"
     }
 
     function splitMeterTitle(label) {
@@ -284,7 +281,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-30"
+                            text: "Version 0.5.5-31"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -466,7 +463,7 @@ Panel {
         property var percentLabel
         property var limitPercent
         property string statusLine: ""
-        property string sectionTitle: "Included in Pro+"
+        property string sectionTitle: "Cursor"
         property var splitMeterTitle
         property color cardSurface
         property color barTrack
