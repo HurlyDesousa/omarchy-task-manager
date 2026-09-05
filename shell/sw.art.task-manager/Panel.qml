@@ -318,7 +318,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-20"
+                            text: "Version 0.5.5-22"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -384,13 +384,13 @@ Panel {
                             width: parent.width
                             spacing: Style.space(10)
                             FanMeter {
-                                side: "L"
+                                side: "Fan L"
                                 fan: root.snapshot.fans ? root.snapshot.fans.left : null
                                 bar: root.bar
                                 Layout.fillWidth: true
                             }
                             FanMeter {
-                                side: "R"
+                                side: "Fan R"
                                 fan: root.snapshot.fans ? root.snapshot.fans.right : null
                                 bar: root.bar
                                 Layout.fillWidth: true
