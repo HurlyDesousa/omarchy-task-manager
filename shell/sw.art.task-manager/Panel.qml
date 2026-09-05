@@ -318,7 +318,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-15"
+                            text: "Version 0.5.5-16"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -722,6 +722,7 @@ Panel {
             spacing: Style.space(2)
             Label {
                 text: labelText
+                Layout.fillWidth: true
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -729,13 +730,17 @@ Panel {
             Label {
                 visible: detailText !== ""
                 text: detailText
+                Layout.fillWidth: true
                 color: Qt.darker(root.bar.foreground, 1.5)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
             }
         }
         Rectangle {
-            width: Style.space(46); height: Style.space(24); radius: Style.space(12)
+            Layout.preferredWidth: Style.space(46)
+            Layout.preferredHeight: Style.space(24)
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            radius: Style.space(12)
             color: checked ? Color.accent : Qt.darker(root.bar.foreground, 2.0)
             Rectangle {
                 width: Style.space(18); height: Style.space(18); radius: Style.space(9)
