@@ -689,6 +689,8 @@ def cmd_autostart_set(value: str) -> int:
 
 
 # ── AI agent usage (Cursor / Codex / Grok) ───────────────────────────────────
+# Part of the shared omarchy-task-manager CLI — keep ai-usage subcommands when
+# bumping pkgrel for unrelated TM / kbd / fan changes.
 
 AGENT_USAGE_IDS = ("cursor", "codex", "grok")
 AGENT_USAGE_NAMES = {"cursor": "Cursor", "codex": "Codex", "grok": "Grok"}
@@ -973,8 +975,11 @@ def _usage_collect_grok_local() -> dict:
     sessions = 0
 
     if not grok_home.is_dir():
-        record["usageStatusText"] = "Grok sessions not found"
-        record["authHelpText"] = f"Expected sessions under {grok_home}"
+        record["usageStatusText"] = "No local Grok sessions"
+        record["authHelpText"] = (
+            f"Run the grok CLI on this laptop; sessions under {grok_home}/sessions "
+            "(no xAI API calls from this panel)."
+        )
         return record
 
     for path in grok_home.glob("sessions/**/updates.jsonl"):
