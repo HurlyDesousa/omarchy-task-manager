@@ -1,7 +1,7 @@
 pkgbase = omarchy-task-manager
 	pkgname = omarchy-task-manager
 	pkgver = 0.5.5
-	pkgrel = 27
+	pkgrel = 30
 	pkgdesc = Omarchy Task Manager Quickshell KeyboardPanel with stats backend
 	url = https://github.com/HurlyDesousa/omarchy-task-manager
 	arch = any

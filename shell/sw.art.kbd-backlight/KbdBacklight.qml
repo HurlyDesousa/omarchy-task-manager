@@ -21,6 +21,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell.Io
+import qs.Commons
 import qs.Ui
 
 Panel {
@@ -218,115 +219,129 @@ Panel {
 
     // ── Panel ───────────────────────────────────────────────────────────────
     // KeyboardPanel is a layer-shell surface anchored to the bar button.
+    // Weather / Task Manager pattern: no scrim, Color.popups border + background.
     KeyboardPanel {
         id: kbdPanel
         anchorItem: button
         owner: root
         bar: root.bar
         open: root.opened
-        contentWidth: 300
-        contentHeight: panelContent.implicitHeight
+        contentWidth: kbdPanel.fittedContentWidth(Style.space(320))
+        contentHeight: kbdPanel.fittedContentHeight(panelContent.implicitHeight, Style.space(360))
 
         Rectangle {
             anchors.fill: parent
-            color: "#1e1e2e"
-            border.color: "#45475a"
+            color: Color.popups.background
+            border.color: Color.popups.border
             border.width: 1
-            radius: 8
+            radius: Style.cornerRadius
             clip: true
 
-            ColumnLayout {
+            Column {
                 id: panelContent
-                spacing: 0
                 width: parent.width
+                spacing: 0
 
                 // ── Header row: title + on/off toggle + gear ────────────
-                RowLayout {
-                    spacing: 8
-                    Layout.fillWidth: true
-                    Layout.topMargin: 12
-                    Layout.leftMargin: 14
-                    Layout.rightMargin: 8
-                    Layout.bottomMargin: 8
-
-                    Label {
-                        text: "Keyboard Backlight"
-                        font.pixelSize: 13
-                        font.bold: true
-                        color: "#cdd6f4"
-                        Layout.fillWidth: true
-                    }
-
-                    SettingToggle {
-                        compact: true
-                        labelless: true
-                        checked: root.kbdEnabled && root.brightness > 0
-                        toggleHandler: function(v) {
-                            if (v) {
-                                root.kbdEnabled = true
-                                if (root.brightness === 0) root.brightness = 100
-                            } else {
-                                root.kbdEnabled = false
-                            }
-                            root.applyAndSave()
-                        }
-                    }
-
-                    // Settings gear button — matches Omarchy themed treatment.
-                    Rectangle {
-                        id: gearBtn
-                        width: 26; height: 26; radius: 5
-                        color: root.showSettings ? "#313244" : "transparent"
-
-                        Behavior on color { ColorAnimation { duration: 100 } }
+                Item {
+                    width: parent.width
+                    height: headerRow.implicitHeight + Style.space(20)
+                    RowLayout {
+                        id: headerRow
+                        width: parent.width - Style.space(32)
+                        x: Style.space(16)
+                        y: Style.space(12)
+                        spacing: Style.space(8)
 
                         Label {
-                            anchors.centerIn: parent
-                            // nf-md-cog (Material Design cog icon)
-                            text: "󰒓"
-                            font.pixelSize: 15
-                            color: root.showSettings ? "#89b4fa" : "#6c7086"
-
-                            Behavior on color { ColorAnimation { duration: 100 } }
+                            text: "Keyboard Backlight"
+                            font.pixelSize: Style.font.title
+                            font.bold: true
+                            color: root.bar.foreground
+                            font.family: root.bar.fontFamily
+                            Layout.fillWidth: true
                         }
 
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showSettings = !root.showSettings
+                        SettingToggle {
+                            compact: true
+                            labelless: true
+                            checked: root.kbdEnabled && root.brightness > 0
+                            toggleHandler: function(v) {
+                                if (v) {
+                                    root.kbdEnabled = true
+                                    if (root.brightness === 0) root.brightness = 100
+                                } else {
+                                    root.kbdEnabled = false
+                                }
+                                root.applyAndSave()
+                            }
+                        }
+
+                        Rectangle {
+                            width: 26; height: 26; radius: Style.cornerRadius
+                            color: root.showSettings
+                                ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+
+                            Behavior on color { ColorAnimation { duration: 100 } }
+
+                            Label {
+                                anchors.centerIn: parent
+                                text: "󰒓"
+                                font.family: root.bar.fontFamily
+                                font.pixelSize: Style.font.body
+                                color: root.showSettings
+                                    ? Style.hoverStateColor(root.bar.foreground, Color.accent)
+                                    : Qt.darker(root.bar.foreground, 1.4)
+
+                                Behavior on color { ColorAnimation { duration: 100 } }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.showSettings = !root.showSettings
+                            }
                         }
                     }
                 }
 
-                Rectangle { height: 1; color: "#45475a"; Layout.fillWidth: true }
+                Rectangle {
+                    width: parent.width
+                    height: Style.spacing.hairline
+                    color: root.bar.foreground
+                    opacity: 0.12
+                }
 
                 // ── Main controls (shown when showSettings is false) ───────
-                ColumnLayout {
-                    id: mainControls
+                Column {
                     visible: !root.showSettings
-                    spacing: 10
-                    Layout.topMargin: 12
-                    Layout.leftMargin: 14
-                    Layout.rightMargin: 14
-                    Layout.bottomMargin: 14
+                    width: parent.width - Style.space(32)
+                    x: Style.space(16)
+                    spacing: Style.space(10)
+                    topPadding: Style.space(12)
+                    bottomPadding: Style.space(14)
 
                     // ── Colour presets ────────────────────────────────────
-                    RowLayout {
-                        spacing: 6
-                        Layout.fillWidth: true
+                    Row {
+                        spacing: Style.space(6)
+                        width: parent.width
 
                         Repeater {
                             model: ["#ffffff", "#ffd080", "#ff3333", "#ff8800",
                                     "#33ee44", "#00eeee", "#3388ff", "#cc44ff"]
                             delegate: Rectangle {
+                                required property string modelData
                                 property string swatch: modelData
-                                width: 26; height: 26; radius: 5
+                                width: Style.space(26); height: Style.space(26)
+                                radius: Style.cornerRadius
                                 color: swatch
                                 border.width: 2
                                 border.color: (root.baseHex.toLowerCase() === swatch)
-                                    ? "#cdd6f4" : "transparent"
+                                    ? root.bar.foreground : "transparent"
+
                                 MouseArea {
                                     anchors.fill: parent
+                                    hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         root.baseHex = swatch
@@ -341,13 +356,14 @@ Panel {
 
                     // ── Brightness slider ─────────────────────────────────
                     RowLayout {
-                        spacing: 8
-                        Layout.fillWidth: true
+                        width: parent.width
+                        spacing: Style.space(8)
 
                         Label {
                             text: "Bright"
-                            color: "#a6adc8"
-                            font.pixelSize: 12
+                            color: Qt.darker(root.bar.foreground, 1.4)
+                            font.family: root.bar.fontFamily
+                            font.pixelSize: Style.font.bodySmall
                         }
 
                         Slider {
@@ -361,21 +377,30 @@ Panel {
                                    brightSlider.visualPosition * (brightSlider.availableWidth - width)
                                 y: brightSlider.topPadding +
                                    brightSlider.availableHeight / 2 - height / 2
-                                implicitWidth: 14; implicitHeight: 14
-                                radius: 7
-                                color: "#89b4fa"
-                                border.color: "#1e1e2e"; border.width: 1
+                                implicitWidth: Style.space(14)
+                                implicitHeight: Style.space(14)
+                                radius: Style.space(7)
+                                color: Color.accent
+                                border.color: Color.popups.background
+                                border.width: 1
                             }
 
-                            background: Rectangle {
+                            background: Item {
                                 x: brightSlider.leftPadding
-                                y: brightSlider.topPadding + brightSlider.availableHeight / 2 - height / 2
-                                width: brightSlider.availableWidth; height: 4; radius: 2
-                                color: "#313244"
+                                y: brightSlider.topPadding + brightSlider.availableHeight / 2 - Style.space(2)
+                                width: brightSlider.availableWidth
+                                height: Style.space(4)
+
                                 Rectangle {
-                                    width: brightSlider.visualPosition * parent.width
-                                    height: parent.height; radius: parent.radius
-                                    color: "#89b4fa"
+                                    anchors.fill: parent
+                                    radius: height / 2
+                                    color: Qt.darker(root.bar.foreground, 2.2)
+                                    Rectangle {
+                                        width: brightSlider.visualPosition * parent.width
+                                        height: parent.height
+                                        radius: parent.radius
+                                        color: Color.accent
+                                    }
                                 }
                             }
 
@@ -387,47 +412,59 @@ Panel {
 
                         Label {
                             text: root.brightness + "%"
-                            color: "#cdd6f4"
-                            font.pixelSize: 12
-                            Layout.minimumWidth: 36
+                            color: root.bar.foreground
+                            font.family: root.bar.fontFamily
+                            font.pixelSize: Style.font.bodySmall
+                            Layout.minimumWidth: Style.space(36)
                         }
                     }
                 }
 
                 // ── Settings panel (shown when showSettings is true) ───────
-                ColumnLayout {
-                    id: settingsControls
+                Column {
                     visible: root.showSettings
-                    spacing: 10
-                    Layout.topMargin: 12
-                    Layout.leftMargin: 14
-                    Layout.rightMargin: 14
-                    Layout.bottomMargin: 14
+                    width: parent.width - Style.space(32)
+                    x: Style.space(16)
+                    spacing: Style.space(10)
+                    topPadding: Style.space(12)
+                    bottomPadding: Style.space(14)
+
+                    Label {
+                        text: "Colour"
+                        color: Qt.darker(root.bar.foreground, 1.4)
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.letterSpacing: 1
+                    }
 
                     // ── Hex color input ───────────────────────────────────
                     RowLayout {
-                        spacing: 8
-                        Layout.fillWidth: true
+                        spacing: Style.space(8)
+                        width: parent.width
 
                         Label {
                             text: "Hex"
-                            color: "#a6adc8"
-                            font.pixelSize: 12
+                            color: Qt.darker(root.bar.foreground, 1.4)
+                            font.family: root.bar.fontFamily
+                            font.pixelSize: Style.font.bodySmall
                         }
 
                         TextField {
                             id: hexInput
                             text: root.baseHex
                             font.family: "monospace"
-                            font.pixelSize: 12
-                            color: "#cdd6f4"
+                            font.pixelSize: Style.font.bodySmall
+                            color: root.bar.foreground
                             Layout.fillWidth: true
-                            leftPadding: 6; rightPadding: 6
-                            topPadding: 4; bottomPadding: 4
+                            leftPadding: Style.space(6)
+                            rightPadding: Style.space(6)
+                            topPadding: Style.space(4)
+                            bottomPadding: Style.space(4)
                             background: Rectangle {
-                                color: "#313244"
-                                radius: 4
-                                border.color: hexInput.activeFocus ? "#89b4fa" : "#45475a"
+                                color: Color.popups.background
+                                radius: Style.cornerRadius
+                                border.color: hexInput.activeFocus
+                                    ? Color.accent : Color.popups.border
                                 border.width: 1
                             }
                             onEditingFinished: {
@@ -447,19 +484,32 @@ Panel {
                             }
                         }
 
-                        // Live color preview swatch.
                         Rectangle {
-                            width: 22; height: 22; radius: 4
+                            width: Style.space(22); height: Style.space(22)
+                            radius: Style.cornerRadius
                             color: root.actualHex
-                            border.color: "#45475a"; border.width: 1
+                            border.color: Color.popups.border
+                            border.width: 1
                         }
                     }
 
-                    Rectangle { height: 1; color: "#313244"; Layout.fillWidth: true }
+                    Rectangle {
+                        width: parent.width
+                        height: Style.spacing.hairline
+                        color: root.bar.foreground
+                        opacity: 0.12
+                    }
 
-                    // ── Autostart toggle ──────────────────────────────────
-                    // When on: restore last color/brightness/enabled on session/bar start.
+                    Label {
+                        text: "Behaviour"
+                        color: Qt.darker(root.bar.foreground, 1.4)
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.letterSpacing: 1
+                    }
+
                     SettingToggle {
+                        width: parent.width
                         labelText: "Autostart"
                         detailText: "Restore on session / bar start"
                         checked: root.autostart
@@ -469,10 +519,8 @@ Panel {
                         }
                     }
 
-                    // ── Auto-off toggle ───────────────────────────────────
-                    // When on: IdleMonitor sends kb #000000 on 3-min idle.
-                    // Screen dim runs regardless — this flag is keyboard-only.
                     SettingToggle {
+                        width: parent.width
                         labelText: "Auto-off on idle"
                         detailText: "Turn off keyboard (not screen) on 3 min idle"
                         checked: root.autoOff
@@ -493,36 +541,43 @@ Panel {
         property var toggleHandler
         property bool compact: false
         property bool labelless: false
-        Layout.fillWidth: !compact
-        spacing: compact ? 6 : 8
+        width: parent ? parent.width : implicitWidth
+        spacing: compact ? Style.space(6) : Style.space(8)
 
         ColumnLayout {
             visible: !labelless
             Layout.fillWidth: !compact
-            spacing: 2
+            spacing: Style.space(2)
 
             Label {
                 text: labelText
-                color: "#cdd6f4"
-                font.pixelSize: compact ? 11 : 12
+                Layout.fillWidth: true
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: compact ? Style.font.caption : Style.font.bodySmall
             }
             Label {
                 visible: detailText !== ""
                 text: detailText
-                color: "#6c7086"
-                font.pixelSize: 10
+                Layout.fillWidth: true
+                color: Qt.darker(root.bar.foreground, 1.5)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
             }
         }
 
         Rectangle {
-            width: 46; height: 24; radius: 12
-            color: checked ? "#89b4fa" : "#45475a"
+            Layout.preferredWidth: Style.space(46)
+            Layout.preferredHeight: Style.space(24)
+            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+            radius: Style.space(12)
+            color: checked ? Color.accent : Qt.darker(root.bar.foreground, 2.0)
 
             Behavior on color { ColorAnimation { duration: 120 } }
 
             Rectangle {
-                width: 18; height: 18; radius: 9
-                color: "#1e1e2e"
+                width: Style.space(18); height: Style.space(18); radius: Style.space(9)
+                color: Color.popups.background
                 anchors.verticalCenter: parent.verticalCenter
                 x: checked ? parent.width - width - 3 : 3
                 Behavior on x { NumberAnimation { duration: 120 } }
