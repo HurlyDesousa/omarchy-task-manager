@@ -1219,7 +1219,11 @@ def _usage_reset_caption(resets_at: Any) -> str:
     )
     today = time.mktime((now.tm_year, now.tm_mon, now.tm_mday, 0, 0, 0, 0, 0, -1))
     days_left = max(0, int(round((reset_day - today) / 86400)))
-    month = time.strftime("%b", reset).lstrip("0")
+    month_names = (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sept", "Oct", "Nov", "Dec",
+    )
+    month = month_names[reset.tm_mon - 1]
     day = str(reset.tm_mday)
     if days_left == 0:
         tail = "resets today"
