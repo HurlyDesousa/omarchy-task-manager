@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-APP_VERSION = "0.5.5-18"
+APP_VERSION = "0.5.5-20"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -550,7 +550,7 @@ def build_snapshot() -> dict:
     for idx in sorted(cores):
         cur = cores[idx]
         prev = prev_cores.get(idx)
-        core_rows.append({"id": idx, "pct": round(cpu_pct(prev, cur), 1)})
+        core_rows.append({"id": idx, "pct": round(cpu_pct(prev, cur))})
 
     gpu_usage = read_gpu_usage()
     gpu_temp = read_gpu_temp()
@@ -584,8 +584,8 @@ def build_snapshot() -> dict:
                 {
                     "pid": pid,
                     "name": name,
-                    "cpu": round(cpu, 1),
-                    "cpu_txt": f"{cpu:.1f}",
+                    "cpu": round(cpu),
+                    "cpu_txt": f"{round(cpu)}",
                     "rss": rss,
                     "rss_txt": fmt_bytes(rss),
                     "starttime": starttime,
@@ -607,7 +607,7 @@ def build_snapshot() -> dict:
     if mem is not None:
         used_kib, total_kib, pct = mem
         ram_block = {
-            "pct": round(pct, 1),
+            "pct": round(pct),
             "detail": fmt_mem_gib_pair(used_kib, total_kib),
         }
 
@@ -621,12 +621,12 @@ def build_snapshot() -> dict:
     return {
         "version": APP_VERSION,
         "cpu": {
-            "pct": round(cpu_pct_val, 1),
+            "pct": round(cpu_pct_val),
             "temp": None if cpu_temp is None else round(cpu_temp, 1),
             "cores": core_rows,
         },
         "gpu": {
-            "pct": None if gpu_usage is None else round(gpu_usage, 1),
+            "pct": None if gpu_usage is None else round(gpu_usage),
             "temp": None if gpu_temp is None else round(gpu_temp, 1),
         },
         "ram": ram_block,
