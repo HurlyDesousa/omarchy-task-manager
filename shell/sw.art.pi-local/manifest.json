@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sw.art.pi-local",
+  "name": "pi (local)",
+  "version": "0.5.5-25",
+  "author": "Toby Swart",
+  "license": "MIT",
+  "description": "Bar launcher for the pi CLI with llama-local provider — click to open a terminal session; health dot when llama-server is live",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "pi (local)",
+    "description": "Click to launch pi --provider llama-local in a login-shell terminal; green dot when 127.0.0.1:8080 is healthy",
+    "category": "Launchers",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
