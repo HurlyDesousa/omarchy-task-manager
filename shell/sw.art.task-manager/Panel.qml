@@ -253,12 +253,12 @@ Panel {
                         x: Style.space(16)
                         spacing: Style.space(10)
 
-                        function toggleRow(label, detail, checked, onToggle) {
+                        function toggleRow(label, detail, checked, toggleHandler) {
                             return settingToggle.createObject(this, {
                                 labelText: label,
                                 detailText: detail || "",
                                 checked: checked,
-                                onToggle: onToggle
+                                toggleHandler: toggleHandler
                             })
                         }
 
@@ -273,12 +273,12 @@ Panel {
                         SettingToggle {
                             labelText: "Start compact"
                             checked: root.prefs.start_compact === true
-                            onToggle: function(v) { root.savePref("start_compact", v) }
+                            toggleHandler: function(v) { root.savePref("start_compact", v) }
                         }
                         SettingToggle {
                             labelText: "Remember last state"
                             checked: root.prefs.remember_expand !== false
-                            onToggle: function(v) { root.savePref("remember_expand", v) }
+                            toggleHandler: function(v) { root.savePref("remember_expand", v) }
                         }
 
                         Label {
@@ -318,7 +318,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-13"
+                            text: "Version 0.5.5-14"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -398,7 +398,7 @@ Panel {
                             Row {
                                 spacing: Style.space(4)
                                 Label {
-                                    text: "Up"
+                                    text: "Uptime"
                                     color: Qt.darker(root.bar.foreground, 1.4)
                                     font.family: root.bar.fontFamily
                                     font.pixelSize: Style.font.bodySmall
@@ -612,30 +612,37 @@ Panel {
         property string detailText
         property var bar
         width: parent.width
-        spacing: Style.space(8)
+        spacing: Style.space(6)
         Label {
             text: label
             Layout.preferredWidth: Style.space(36)
+            Layout.maximumWidth: Style.space(36)
             color: Qt.darker(bar.foreground, 1.4)
             font.family: bar.fontFamily
             font.pixelSize: Style.font.bodySmall
         }
         Label {
             text: valueText
-            Layout.preferredWidth: Style.space(40)
+            Layout.preferredWidth: Style.space(44)
+            Layout.maximumWidth: Style.space(44)
+            horizontalAlignment: Text.AlignRight
             color: bar.foreground
             font.family: bar.fontFamily
             font.pixelSize: Style.font.bodySmall
         }
         MeterBar {
             Layout.fillWidth: true
+            Layout.minimumWidth: Style.space(48)
             fraction: parent.fraction
             bar: parent.bar
         }
         Label {
             text: detailText
-            Layout.preferredWidth: Style.space(72)
+            Layout.preferredWidth: Style.space(104)
+            Layout.minimumWidth: Style.space(104)
+            Layout.maximumWidth: Style.space(104)
             horizontalAlignment: Text.AlignRight
+            elide: Text.ElideLeft
             color: bar.foreground
             font.family: bar.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -670,7 +677,7 @@ Panel {
         property string labelText
         property string detailText: ""
         property bool checked
-        property var onToggle
+        property var toggleHandler
         width: parent ? parent.width : implicitWidth
         spacing: Style.space(8)
         ColumnLayout {
@@ -703,7 +710,7 @@ Panel {
             MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: if (onToggle) onToggle(!checked)
+                onClicked: if (toggleHandler) toggleHandler(!checked)
             }
         }
     }
