@@ -18,6 +18,15 @@ PLUGIN_SRC="${ROOT}/shell/${PLUGIN_ID}"
 KBD_PLUGIN_ID="sw.art.kbd-backlight"
 KBD_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${KBD_PLUGIN_ID}"
 KBD_PLUGIN_SRC="${ROOT}/shell/${KBD_PLUGIN_ID}"
+CURSOR_PLUGIN_ID="sw.art.cursor"
+CURSOR_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${CURSOR_PLUGIN_ID}"
+CURSOR_PLUGIN_SRC="${ROOT}/shell/${CURSOR_PLUGIN_ID}"
+PILOCAL_PLUGIN_ID="sw.art.pi-local"
+PILOCAL_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PILOCAL_PLUGIN_ID}"
+PILOCAL_PLUGIN_SRC="${ROOT}/shell/${PILOCAL_PLUGIN_ID}"
+GROK_PLUGIN_ID="sw.art.grok"
+GROK_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${GROK_PLUGIN_ID}"
+GROK_PLUGIN_SRC="${ROOT}/shell/${GROK_PLUGIN_ID}"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python python-gobject gtk4)
 CLASS="art.sw.omarchy.TaskManager"
@@ -254,6 +263,90 @@ path.write_text(
 PY
 }
 
+# ── AI launcher plugins (sw.art.cursor / sw.art.pi-local / sw.art.grok) ──────
+# Each plugin is a simple BarWidget + BarIconButton that opens an app or a
+# login-shell terminal.  Installed under ~/.config/omarchy/plugins/<id>/ and
+# patched into shell.json as a group immediately left of the clock widget.
+
+install_ai_launcher_plugins() {
+  local srcs=(
+    "${CURSOR_PLUGIN_SRC}:${CURSOR_PLUGIN_DIR}:BarWidget.qml"
+    "${PILOCAL_PLUGIN_SRC}:${PILOCAL_PLUGIN_DIR}:BarWidget.qml"
+    "${GROK_PLUGIN_SRC}:${GROK_PLUGIN_DIR}:BarWidget.qml"
+  )
+  local entry
+  for entry in "${srcs[@]}"; do
+    local src dir qml
+    src="${entry%%:*}"; entry="${entry#*:}"
+    dir="${entry%%:*}"; qml="${entry#*:}"
+    if [[ ! -d "${src}" ]]; then
+      echo "Warning: plugin source not found at ${src}"; continue
+    fi
+    mkdir -p "${dir}"
+    install -Dm644 "${src}/manifest.json" "${dir}/manifest.json"
+    install -Dm644 "${src}/${qml}"        "${dir}/${qml}"
+    echo "AI launcher plugin: installed $(basename "${dir}") to ${dir}"
+  done
+}
+
+patch_shell_json_ai_launchers() {
+  [[ -f "${SHELL_JSON}" ]] || {
+    echo "Note: ${SHELL_JSON} not found; skipping bar layout patch."
+    echo "      Run: omarchy plugin enable ${CURSOR_PLUGIN_ID}"
+    echo "           omarchy plugin enable ${PILOCAL_PLUGIN_ID}"
+    echo "           omarchy plugin enable ${GROK_PLUGIN_ID}"
+    return 0
+  }
+
+  python3 - "${SHELL_JSON}" \
+      "${CURSOR_PLUGIN_ID}" "${PILOCAL_PLUGIN_ID}" "${GROK_PLUGIN_ID}" <<'PY'
+import json, sys, pathlib
+
+path    = pathlib.Path(sys.argv[1])
+new_ids = sys.argv[2:]   # cursor, pi-local, grok
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Warning: could not parse {path}: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+center = (
+    data.setdefault("bar", {})
+        .setdefault("layout", {})
+        .setdefault("center", [])
+)
+
+existing = {e.get("id") for e in center}
+to_add   = [{"id": pid} for pid in new_ids if pid not in existing]
+
+if not to_add:
+    sys.exit(0)   # all already present — nothing to do
+
+# Anchor: insert the group immediately before the clock/time widget.
+# If kbd-backlight is already before the clock we naturally land between
+# kbd-backlight and the clock, which is the desired layout.
+clock_idx = next(
+    (i for i, e in enumerate(center)
+     if any(kw in e.get("id", "").lower() for kw in ("clock", "time"))),
+    None,
+)
+
+if clock_idx is not None:
+    center[clock_idx:clock_idx] = to_add
+    anchor = center[clock_idx + len(to_add)]["id"]
+    print(f"shell.json: inserted {[e['id'] for e in to_add]} left of '{anchor}'")
+else:
+    center.extend(to_add)
+    print(f"shell.json: appended {[e['id'] for e in to_add]} (no clock widget found)")
+
+path.write_text(
+    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
 # ── Waybar integration (optional – skipped when waybar is not configured) ─────
 # Idempotently adds custom/omarchy-task-manager to ~/.config/waybar/config.jsonc
 # (near custom/weather in modules-center) and a margin rule to style.css.
@@ -341,6 +434,8 @@ install_quickshell_plugin
 patch_shell_json
 install_kbd_backlight_plugin
 patch_shell_json_kbd
+install_ai_launcher_plugins
+patch_shell_json_ai_launchers
 upsert_waybar_config
 upsert_waybar_style
 
@@ -356,3 +451,10 @@ echo "Keyboard backlight plugin: ${KBD_PLUGIN_DIR}"
 echo "  Bar icon placed immediately left of the clock."
 echo "  State file: ~/.local/state/omarchy/kbd-backlight"
 echo "  (or: omarchy plugin enable ${KBD_PLUGIN_ID})"
+echo "AI launcher plugins:"
+echo "  ${CURSOR_PLUGIN_DIR}  (Cursor IDE)"
+echo "  ${PILOCAL_PLUGIN_DIR}  (pi --provider llama-local)"
+echo "  ${GROK_PLUGIN_DIR}  (grok CLI)"
+echo "  Bar icons inserted as a group left of the clock."
+echo "  Terminal launcher: xdg-terminal-exec (fallback: ghostty, kitty)"
+echo "  (or: omarchy plugin enable ${CURSOR_PLUGIN_ID})"

@@ -1,7 +1,7 @@
 # Maintainer: Toby Swart <toby@s-w.art>
 pkgname=omarchy-task-manager
 pkgver=0.5.5
-pkgrel=7
+pkgrel=8
 pkgdesc='Omarchy-themed GTK4 task manager with Quickshell bar widget'
 arch=('any')
 url='https://github.com/HurlyDesousa/omarchy-task-manager'
@@ -37,5 +37,18 @@ package() {
     "$pkgdir/usr/share/omarchy/plugins/sw.art.kbd-backlight/manifest.json"
   install -Dm644 "$startdir/shell/sw.art.kbd-backlight/KbdBacklight.qml" \
     "$pkgdir/usr/share/omarchy/plugins/sw.art.kbd-backlight/KbdBacklight.qml"
+  # AI launcher plugins — also installed from $startdir (manifest.json basename collision).
+  install -Dm644 "$startdir/shell/sw.art.cursor/manifest.json" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.cursor/manifest.json"
+  install -Dm644 "$startdir/shell/sw.art.cursor/BarWidget.qml" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.cursor/BarWidget.qml"
+  install -Dm644 "$startdir/shell/sw.art.pi-local/manifest.json" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.pi-local/manifest.json"
+  install -Dm644 "$startdir/shell/sw.art.pi-local/BarWidget.qml" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.pi-local/BarWidget.qml"
+  install -Dm644 "$startdir/shell/sw.art.grok/manifest.json" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.grok/manifest.json"
+  install -Dm644 "$startdir/shell/sw.art.grok/BarWidget.qml" \
+    "$pkgdir/usr/share/omarchy/plugins/sw.art.grok/BarWidget.qml"
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
