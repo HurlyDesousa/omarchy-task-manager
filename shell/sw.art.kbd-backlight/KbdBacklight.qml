@@ -9,8 +9,8 @@
 //   Fields read by external helpers:
 //     hex      — actual colour currently sent to EC (for idle restore)
 //     enabled  — whether keyboard backlight is on (kbdEnabled && brightness > 0)
-//     auto_off — when true, IdleMonitor sends kb #000000 on idle (keyboard only;
-//                screen dim at 3 min runs regardless of this flag)
+//     auto_off — bool gate only: when true, omarchy-idle-dim blacks RGB at idle.dim
+//                (Omarchy Idle Service; timing from shell.shellConfig.idle.dim)
 //     autostart— when true, restore last colour/brightness/enabled on session start
 //
 // Panel pattern: Panel (qs.Ui) + KeyboardPanel (qs.Ui) anchored to the bar button.
@@ -20,6 +20,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -28,6 +29,20 @@ Panel {
     id: root
     moduleName: "sw.art.kbd-backlight"
     manageIpc: false
+
+    // Injected by omarchy-shell when available (idle Service contract).
+    property var shell: null
+
+    readonly property int defaultDimSeconds: 180
+    readonly property var idleConfig: shell && shell.shellConfig && shell.shellConfig.idle ? shell.shellConfig.idle : ({})
+    readonly property int dimTimeoutSeconds: {
+        var fromShell = secondsFromConfig(idleConfig.dim, -1)
+        if (fromShell >= 0) return fromShell
+        if (shellJsonDimSeconds >= 0) return shellJsonDimSeconds
+        return defaultDimSeconds
+    }
+
+    property int shellJsonDimSeconds: -1
 
     // ── Live state ──────────────────────────────────────────────────────────
     // baseHex: full-brightness chosen color (#rrggbb).
@@ -40,7 +55,7 @@ Panel {
 
     // ── Settings state ──────────────────────────────────────────────────────
     // autostart: restore last color/brightness/enabled on session/bar start.
-    // autoOff:   IdleMonitor may dim keyboard on idle when true (written as auto_off).
+    // autoOff:   bool gate for omarchy-idle-dim at idle.dim (written as auto_off).
     // showSettings: controls whether gear panel is open in the KeyboardPanel.
     property bool autostart:    true
     property bool autoOff:      true
@@ -137,9 +152,38 @@ Panel {
             "cat \"$HOME/.local/state/omarchy/kbd-backlight\" 2>/dev/null" +
             " || echo '{}'"]
         initProc.running = true
+        parseShellJsonIdle()
+    }
+
+    FileView {
+        id: shellJsonFile
+        path: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
+        watchChanges: true
+        printErrors: false
+        onLoaded: root.parseShellJsonIdle()
+        onFileChanged: reload()
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────
+    function secondsFromConfig(value, fallback) {
+        var n = Number(value)
+        if (!isFinite(n) || n < 0) return fallback
+        return Math.floor(n)
+    }
+
+    function formatDimTimeout(seconds) {
+        var s = Math.max(0, Math.floor(seconds))
+        if (s >= 60 && s % 60 === 0) return (s / 60) + " min"
+        return s + "s"
+    }
+
+    function parseShellJsonIdle() {
+        try {
+            var parsed = JSON.parse(shellJsonFile.text() || "{}")
+            if (parsed && parsed.idle)
+                root.shellJsonDimSeconds = secondsFromConfig(parsed.idle.dim, -1)
+        } catch (e) {}
+    }
     function _doApply() {
         if (ecProc.running) { applyTimer.restart(); return }
         var hex = actualHex
@@ -157,7 +201,7 @@ Panel {
     //   _base    — pre-scaled base colour (for UI restore across sessions)
     //   brightness — 0-100 (for UI restore)
     //   autostart  — restore on session start (Omarchy / bar restart)
-    //   auto_off   — allow IdleMonitor to dim keyboard on idle
+    //   auto_off   — bool gate for omarchy-idle-dim (timing from idle.dim, not stored here)
     function _doSave() {
         if (saveProc.running) { saveTimer.restart(); return }
         var en = kbdEnabled && brightness > 0
@@ -219,7 +263,7 @@ Panel {
 
     // ── Panel ───────────────────────────────────────────────────────────────
     // KeyboardPanel is a layer-shell surface anchored to the bar button.
-    // Weather / Task Manager pattern: no scrim, Color.popups border + background.
+    // Weather / Task Manager pattern: no scrim, KeyboardPanel outer border only.
     KeyboardPanel {
         id: kbdPanel
         anchorItem: button
@@ -229,12 +273,8 @@ Panel {
         contentWidth: kbdPanel.fittedContentWidth(Style.space(320))
         contentHeight: kbdPanel.fittedContentHeight(panelContent.implicitHeight, Style.space(360))
 
-        Rectangle {
+        Item {
             anchors.fill: parent
-            color: Color.popups.background
-            border.color: Color.popups.border
-            border.width: 1
-            radius: Style.cornerRadius
             clip: true
 
             Column {
@@ -511,7 +551,7 @@ Panel {
                     SettingToggle {
                         width: parent.width
                         labelText: "Autostart"
-                        detailText: "Restore on session / bar start"
+                        detailText: "Restore on session"
                         checked: root.autostart
                         toggleHandler: function(v) {
                             root.autostart = v
@@ -522,7 +562,7 @@ Panel {
                     SettingToggle {
                         width: parent.width
                         labelText: "Auto-off on idle"
-                        detailText: "Turn off keyboard (not screen) on 3 min idle"
+                        detailText: "Follows display auto-dim (" + root.formatDimTimeout(root.dimTimeoutSeconds) + ")"
                         checked: root.autoOff
                         toggleHandler: function(v) {
                             root.autoOff = v

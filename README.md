@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-32** — Keyboard backlight: remove inner popover border (KeyboardPanel outer only); trim gear toggle detail strings; auto-off UI follows `shell.shellConfig.idle.dim` (Omarchy Idle Service + `auto_off` bool gate; no parallel timer). `ai-usage*` CLI / AI tray preserved.
+
 **0.5.5-31** — AI usage: rename Cursor subsection header from "Included in Pro+" / tier label to "Cursor" (0.5.5-31 pkgrel; dual quota bars / `ai-usage*` CLI / AI tray / kbd Omarchy restyle preserved).
 
 **0.5.5-30** — Keyboard RGB popover: Omarchy theme restyle (Style/Color tokens, Task Manager panel pattern); labelless header toggle preserved (0.5.5-30 pkgrel; AI usage bars / `ai-usage*` CLI / AI tray preserved).
