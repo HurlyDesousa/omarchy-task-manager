@@ -17,21 +17,38 @@ Panel {
 
     property var snapshot: ({ agents: [] })
     property bool updating: false
+    property bool showSettings: false
+    readonly property string appVersion: "0.5.5-36"
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: 300000
 
-    // Cursor Pro+ / Grok Bot reference palette (true-black panel friendly).
-    readonly property color cardSurface: "#1A1A1A"
-    readonly property color barTrack: "#2D2D2D"
-    readonly property color cursorBarFill: "#60A5FA"
-    readonly property color otherBarFill: "#E5E7EB"
-    readonly property color grokBotBarFill: "#6B9ACF"
-    readonly property color mutedCaption: "#888888"
+    // Live Omarchy theme tokens — Color/Style update on `omarchy theme set`.
+    readonly property color themeForeground: bar ? bar.foreground : Color.foreground
+    readonly property color themeUrgent: (bar && bar.urgent) ? bar.urgent : Color.urgent
+    readonly property color cardSurface: {
+        var _live = Style.normalFill
+        return Style.normalFillFor(themeForeground, Color.accent, Color.urgent)
+    }
+    readonly property color barTrack: {
+        var _live = Style.selectedFill
+        return Style.selectedFillFor(themeForeground, Color.accent, Color.urgent)
+    }
+    readonly property color cursorBarFill: Color.accent
+    readonly property color otherBarFill: themeForeground
+    readonly property color grokBotBarFill: Color.accent
+    readonly property color mutedCaption: Color.muted
 
     function cursorSectionTitle(agent) {
         return "Cursor"
     }
+
+    // Params + current model version, shown to the right of each section name.
+    // Composer 2.5 is the Kimi K2.5 1T MoE checkpoint; Grok 4.6 is the 1.5T V9 base.
+    readonly property string cursorModelMeta: "Grok 4.6 · 1.5T    Composer 2.5 · 1T"
+    readonly property string grokBotModelMeta: "Grok 4.6 · 1.5T"
+    readonly property string grokBuildModelMeta: "Grok 4.6 · 1.5T"
+    readonly property string piModelMeta: "Qwen 2.5 · 3B"
 
     function splitMeterTitle(label) {
         var text = String(label || "Usage")
@@ -51,6 +68,7 @@ Panel {
     }
 
     function close() {
+        root.showSettings = false
         root.controller.hide()
     }
 
@@ -121,10 +139,19 @@ Panel {
     }
 
     Timer {
+        id: warmupTimer
+        interval: 20000
+        repeat: false
+        running: true
+        triggeredOnStart: false
+        onTriggered: root.updateAndRefresh()
+    }
+
+    Timer {
         id: refreshTimer
         interval: root.refreshMs
         repeat: true
-        running: root.opened
+        running: true
         triggeredOnStart: false
         onTriggered: root.updateAndRefresh()
     }
@@ -135,7 +162,7 @@ Panel {
         owner: root.barIdentity
         bar: root.bar
         open: root.opened
-        centerOnBar: true
+        centerOnBar: false
         focusTarget: keyCatcher
         contentWidth: panel.fittedContentWidth(Style.space(440))
         contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight, Style.space(520))
@@ -205,6 +232,26 @@ Panel {
                                 onClicked: root.updateAndRefresh()
                             }
                         }
+
+                        Rectangle {
+                            width: 26; height: 26; radius: Style.cornerRadius
+                            color: root.showSettings
+                                ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+                            Label {
+                                anchors.centerIn: parent
+                                text: "󰒓"
+                                font.family: root.bar.fontFamily
+                                font.pixelSize: Style.font.body
+                                color: root.showSettings
+                                    ? Style.hoverStateColor(root.bar.foreground, Color.accent)
+                                    : Qt.darker(root.bar.foreground, 1.4)
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.showSettings = !root.showSettings
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -215,6 +262,29 @@ Panel {
                     }
 
                     Column {
+                        visible: root.showSettings
+                        width: parent.width - Style.space(32)
+                        x: Style.space(16)
+                        spacing: Style.space(10)
+
+                        Label {
+                            text: "About"
+                            color: Qt.darker(root.bar.foreground, 1.4)
+                            font.family: root.bar.fontFamily
+                            font.pixelSize: Style.font.caption
+                            font.letterSpacing: 1
+                        }
+
+                        Label {
+                            text: "Version " + root.appVersion
+                            color: root.bar.foreground
+                            font.family: root.bar.fontFamily
+                            font.pixelSize: Style.font.body
+                        }
+                    }
+
+                    Column {
+                        visible: !root.showSettings
                         width: parent.width - Style.space(32)
                         x: Style.space(16)
                         spacing: Style.space(14)
@@ -271,20 +341,13 @@ Panel {
                             mutedCaption: root.mutedCaption
                         }
 
-                        Label {
+                        SectionNameRow {
                             width: parent.width
-                            wrapMode: Text.WordWrap
-                            text: "Local pi is excluded. Refreshes on open from ~/.local/state/omarchy/agents/usage/."
-                            color: Qt.darker(root.bar.foreground, 1.5)
-                            font.family: root.bar.fontFamily
-                            font.pixelSize: Style.font.caption
-                        }
-
-                        Label {
-                            text: "Version 0.5.5-35"
-                            color: Qt.darker(root.bar.foreground, 1.5)
-                            font.family: root.bar.fontFamily
-                            font.pixelSize: Style.font.bodySmall
+                            titleText: "Pi"
+                            titleBold: true
+                            titleSize: Style.font.caption
+                            restText: " (local is excluded)"
+                            modelMeta: root.piModelMeta
                         }
                     }
                 }
@@ -292,12 +355,59 @@ Panel {
         }
     }
 
+    component SectionNameRow: RowLayout {
+        property string titleText: ""
+        property string restText: ""
+        property string modelMeta: ""
+        property bool titleBold: false
+        property int titleSize: Style.font.bodySmall
+
+        spacing: Style.space(8)
+        width: parent ? parent.width : 0
+
+        Row {
+            spacing: 0
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            clip: true
+
+            Label {
+                text: titleText
+                font.bold: titleBold
+                font.pixelSize: titleSize
+                font.family: root.bar.fontFamily
+                color: root.bar.foreground
+            }
+            Label {
+                visible: restText !== ""
+                text: restText
+                font.pixelSize: titleSize
+                font.family: root.bar.fontFamily
+                color: root.bar.foreground
+            }
+        }
+
+        Label {
+            visible: modelMeta !== ""
+            text: modelMeta
+            color: root.mutedCaption
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            horizontalAlignment: Text.AlignRight
+            wrapMode: Text.NoWrap
+            elide: Text.ElideLeft
+            Layout.alignment: Qt.AlignVCenter
+            Layout.maximumWidth: parent.width * 0.68
+        }
+    }
+
     component MeterBar: Item {
         property real fraction: 0
         property string barStyle: "cursor"
-        property color trackColor: "#2D2D2D"
-        property color fillColor: "#60A5FA"
-        height: Style.space(5)
+        property color trackColor: Style.selectedFill
+        property color fillColor: Color.accent
+        readonly property bool alarming: fraction >= 0.9
+        height: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
 
         Rectangle {
             anchors.fill: parent
@@ -307,7 +417,10 @@ Panel {
                 height: parent.height
                 width: parent.width * Math.max(0, Math.min(1, fraction))
                 radius: parent.radius
-                color: parent.parent.fillColor
+                color: parent.parent.alarming ? root.themeUrgent : parent.parent.fillColor
+                Behavior on width {
+                    NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+                }
             }
         }
     }
@@ -368,7 +481,8 @@ Panel {
 
             Label {
                 text: limit ? percentLabel(limit) : ""
-                color: bar.foreground
+                color: (limit && limitPercent && (limitPercent(limit) || 0) >= 0.9)
+                    ? root.themeUrgent : bar.foreground
                 font.family: bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 horizontalAlignment: Text.AlignRight
@@ -396,7 +510,7 @@ Panel {
         }
     }
 
-    component DarkUsageCard: Rectangle {
+    component UsageCard: BorderSurface {
         id: card
         property var limits
         property var bar
@@ -412,9 +526,9 @@ Panel {
         property string statusLine: ""
         property bool showMeters: true
 
-        radius: Style.cornerRadius + 2
+        radius: Style.cornerRadius
         color: card.cardSurface
-        border.width: 0
+        borderSpec: Border.controlSpec("normal", bar ? bar.foreground : Color.foreground, Color.accent)
         implicitWidth: parent ? parent.width : 0
         implicitHeight: cardColumn.implicitHeight + Style.space(28)
 
@@ -475,15 +589,13 @@ Panel {
         spacing: Style.space(8)
         width: parent.width
 
-        Label {
-            text: parent.sectionTitle
-            font.pixelSize: Style.font.bodySmall
-            font.bold: false
-            color: bar.foreground
-            font.family: bar.fontFamily
+        SectionNameRow {
+            width: parent.width
+            titleText: parent.sectionTitle
+            modelMeta: root.cursorModelMeta
         }
 
-        DarkUsageCard {
+        UsageCard {
             width: parent.width
             bar: parent.bar
             limits: agent ? (agent.limits || []) : []
@@ -519,15 +631,13 @@ Panel {
         spacing: Style.space(8)
         width: parent.width
 
-        Label {
-            text: "Grok Bot"
-            font.pixelSize: Style.font.bodySmall
-            font.bold: false
-            color: bar.foreground
-            font.family: bar.fontFamily
+        SectionNameRow {
+            width: parent.width
+            titleText: "Grok Bot"
+            modelMeta: root.grokBotModelMeta
         }
 
-        DarkUsageCard {
+        UsageCard {
             width: parent.width
             bar: parent.bar
             limits: grokBotLimits(agent)
@@ -552,6 +662,8 @@ Panel {
                     for (var key in entry)
                         copy[key] = entry[key]
                     copy.barStyle = "grokbot"
+                    copy.label = "Usage"
+                    copy.title = "Usage"
                     styled.push(copy)
                 }
                 return styled
@@ -577,15 +689,13 @@ Panel {
         spacing: Style.space(8)
         width: parent.width
 
-        Label {
-            text: agent ? (agent.name || "Grok (grok build)") : "Grok (grok build)"
-            font.pixelSize: Style.font.bodySmall
-            font.bold: false
-            color: bar.foreground
-            font.family: bar.fontFamily
+        SectionNameRow {
+            width: parent.width
+            titleText: "Grok (chat and build)"
+            modelMeta: root.grokBuildModelMeta
         }
 
-        DarkUsageCard {
+        UsageCard {
             width: parent.width
             bar: parent.bar
             limits: grokBuildLimits(agent)
