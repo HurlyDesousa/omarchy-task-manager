@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.pi-local",
   "name": "pi (local)",
-  "version": "0.5.5-35",
+  "version": "0.5.5-36",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Bar launcher for the pi CLI with llama-local provider — click to open a terminal session; health dot when llama-server is live",

@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-36** — AI usage polish: Omarchy theme tokens, right-edge popup anchor, model meta rows, settings gear with About/version, animated meters with urgent tint at 90%+, background refresh warmup. ToggleSwitch / kbd-backlight / TM settings from 0.5.5-35 preserved.
+
 **0.5.5-35** — Bluetooth-style toggles: kbd header uses bare `ToggleSwitch`; kbd gear + TM settings use `qs.Ui.Toggle` labeled rows; slightly larger RGB gear icon. `ai-usage*` CLI / AI tray / idle.dim `auto_off` bool preserved.
 
 **0.5.5-32** — Keyboard backlight: remove inner popover border (KeyboardPanel outer only); trim gear toggle detail strings; auto-off UI follows `shell.shellConfig.idle.dim` (Omarchy Idle Service + `auto_off` bool gate; no parallel timer). `ai-usage*` CLI / AI tray preserved.
