@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-37"
+APP_VERSION = "0.5.5-38"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -715,7 +715,7 @@ CURSOR_DASHBOARD_USAGE_URL = (
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
 )
 CURSOR_ACCESS_TOKEN_KEY = "cursorAuth/accessToken"
-CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-37"
+CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-38"
 USAGE_MISSING_HELP: dict[str, tuple[str, str]] = {
     "cursor": (
         "No Cursor usage data yet",

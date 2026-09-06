@@ -18,7 +18,7 @@ Panel {
     property var snapshot: ({ agents: [] })
     property bool updating: false
     property bool showSettings: false
-    readonly property string appVersion: "0.5.5-37"
+    readonly property string appVersion: "0.5.5-38"
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: 300000
