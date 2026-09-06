@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.grok",
   "name": "Grok",
-  "version": "0.5.5-38",
+  "version": "0.5.5-39",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Bar launcher for the grok CLI (mise shim) — click to open a terminal session",

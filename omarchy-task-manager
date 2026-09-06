@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-38"
+APP_VERSION = "0.5.5-39"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -714,8 +714,27 @@ USAGE_STALE_SECONDS = 300
 CURSOR_DASHBOARD_USAGE_URL = (
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
 )
+CURSOR_PLAN_INFO_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo"
+CURSOR_SAND_USAGE_URL = (
+    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus"
+)
+CURSOR_OAUTH_TOKEN_URL = "https://api2.cursor.sh/oauth/token"
+CURSOR_OAUTH_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 CURSOR_ACCESS_TOKEN_KEY = "cursorAuth/accessToken"
-CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-38"
+CURSOR_REFRESH_TOKEN_KEY = "cursorAuth/refreshToken"
+CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-39"
+CURSOR_TIER_LABELS = {
+    "pro_plus": "Pro+",
+    "pro-plus": "Pro+",
+    "proplus": "Pro+",
+    "pro": "Pro",
+    "ultra": "Ultra",
+    "free": "Free",
+    "hobby": "Hobby",
+    "business": "Business",
+    "team": "Team",
+    "enterprise": "Enterprise",
+}
 USAGE_MISSING_HELP: dict[str, tuple[str, str]] = {
     "cursor": (
         "No Cursor usage data yet",
@@ -1007,7 +1026,7 @@ def _usage_jwt_is_expired(token: str) -> bool:
         return False
 
 
-def _usage_read_cursor_access_token() -> str:
+def _usage_read_cursor_item(key: str) -> str:
     for db in _usage_cursor_vscdb_paths():
         try:
             import sqlite3
@@ -1016,7 +1035,7 @@ def _usage_read_cursor_access_token() -> str:
             conn.execute("PRAGMA query_only = ON")
             row = conn.execute(
                 "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
-                (CURSOR_ACCESS_TOKEN_KEY,),
+                (key,),
             ).fetchone()
             conn.close()
         except Exception:
@@ -1032,6 +1051,96 @@ def _usage_read_cursor_access_token() -> str:
     return ""
 
 
+def _usage_read_cursor_access_token() -> str:
+    return _usage_read_cursor_item(CURSOR_ACCESS_TOKEN_KEY)
+
+
+def _usage_cursor_refresh_access_token(refresh_token: str) -> str:
+    if not refresh_token:
+        return ""
+    body = json.dumps(
+        {
+            "grant_type": "refresh_token",
+            "client_id": CURSOR_OAUTH_CLIENT_ID,
+            "refresh_token": refresh_token,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        CURSOR_OAUTH_TOKEN_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": CURSOR_DASHBOARD_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+    except Exception:
+        return ""
+    if not isinstance(payload, dict) or payload.get("shouldLogout") is True:
+        return ""
+    return str(payload.get("access_token") or "").strip()
+
+
+def _usage_cursor_bearer() -> str:
+    token = _usage_read_cursor_access_token()
+    if token and not _usage_jwt_is_expired(token):
+        return token
+    refreshed = _usage_cursor_refresh_access_token(
+        _usage_read_cursor_item(CURSOR_REFRESH_TOKEN_KEY)
+    )
+    return refreshed or token
+
+
+def _usage_cursor_http_json(url: str, token: str) -> dict | None:
+    if not token:
+        return None
+    request = urllib.request.Request(
+        url,
+        data=b"{}",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Connect-Protocol-Version": "1",
+            "User-Agent": CURSOR_DASHBOARD_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _usage_cursor_any_to_iso(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, dict):
+        seconds = value.get("seconds")
+        if seconds is None:
+            seconds = value.get("val")
+        if seconds is None:
+            return ""
+        value = seconds
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1_000_000_000_000:
+            ts /= 1000.0
+        try:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        except (OverflowError, OSError, ValueError):
+            return ""
+    raw = str(value).strip()
+    if "T" in raw or (len(raw) >= 10 and raw[4] == "-" and raw[7] == "-"):
+        return raw
+    return ""
+
+
 def _usage_fraction_from_percent_value(value: Any) -> float | None:
     try:
         percent = float(value)
@@ -1044,34 +1153,87 @@ def _usage_fraction_from_percent_value(value: Any) -> float | None:
     return min(1.0, max(0.0, percent))
 
 
-def _usage_cursor_plan_fractions(plan: dict) -> tuple[float | None, float | None]:
-    """Prefer spend/limit over dashboard percent fields (often stuck near 1%)."""
+def _usage_cursor_settings_percent(value: Any) -> float | None:
+    """Parse Cursor Settings percent fields (1 == 1% used)."""
+    try:
+        percent = float(value)
+    except (TypeError, ValueError):
+        return None
+    if percent != percent or percent < 0:
+        return None
+    if percent == 0:
+        return 0.0
+    # Integer 1–100 from Plan & Usage, or already a 0–1 fraction.
+    if percent > 1:
+        percent /= 100.0
+    elif percent == 1:
+        percent = 0.01
+    return min(1.0, max(0.0, percent))
+
+
+def _usage_cursor_spend_fractions(plan: dict) -> tuple[float | None, float | None]:
     auto_frac: float | None = None
     api_frac: float | None = None
     try:
         limit = float(plan.get("limit") or 0)
     except (TypeError, ValueError):
         limit = 0.0
-    if limit > 0:
-        try:
-            included = float(plan.get("includedSpend") or 0)
-            if included >= 0:
-                auto_frac = min(1.0, max(0.0, included / limit))
-        except (TypeError, ValueError):
-            pass
-        try:
-            total = float(plan.get("totalSpend") or 0)
-            included = float(plan.get("includedSpend") or 0)
-            api_spend = max(0.0, total - included)
-            if api_spend >= 0:
-                api_frac = min(1.0, max(0.0, api_spend / limit))
-        except (TypeError, ValueError):
-            pass
-    if auto_frac is None:
-        auto_frac = _usage_fraction_from_percent_value(plan.get("autoPercentUsed"))
-    if api_frac is None:
-        api_frac = _usage_fraction_from_percent_value(plan.get("apiPercentUsed"))
+    if limit <= 0:
+        return None, None
+    try:
+        included = float(plan.get("includedSpend") or plan.get("included_spend") or 0)
+        if included >= 0:
+            auto_frac = min(1.0, max(0.0, included / limit))
+    except (TypeError, ValueError):
+        pass
+    try:
+        total = float(plan.get("totalSpend") or plan.get("total_spend") or 0)
+        included = float(plan.get("includedSpend") or plan.get("included_spend") or 0)
+        api_spend = max(0.0, total - included)
+        api_frac = min(1.0, max(0.0, api_spend / limit))
+    except (TypeError, ValueError):
+        pass
     return auto_frac, api_frac
+
+
+def _usage_cursor_plan_fractions(plan: dict) -> tuple[float | None, float | None]:
+    """Use the same auto/api percents as Cursor Settings → Plan & Usage."""
+    auto_frac = _usage_cursor_settings_percent(
+        plan.get("autoPercentUsed", plan.get("auto_percent_used"))
+    )
+    api_frac = _usage_cursor_settings_percent(
+        plan.get("apiPercentUsed", plan.get("api_percent_used"))
+    )
+    if auto_frac is None:
+        auto_frac = _usage_cursor_settings_percent(
+            plan.get("totalPercentUsed", plan.get("total_percent_used"))
+        )
+    # Cursor Settings shows 0% Other Models when the api percent field is omitted.
+    if auto_frac is not None and api_frac is None:
+        api_frac = 0.0
+    if auto_frac is None or api_frac is None:
+        spend_auto, spend_api = _usage_cursor_spend_fractions(plan)
+        if auto_frac is None:
+            auto_frac = spend_auto
+        if api_frac is None:
+            api_frac = spend_api
+    return auto_frac, api_frac
+
+
+def _usage_cursor_tier_label(*candidates: Any) -> str:
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        key = text.lower().replace(" ", "_")
+        if key in CURSOR_TIER_LABELS:
+            return CURSOR_TIER_LABELS[key]
+        for needle, label in CURSOR_TIER_LABELS.items():
+            if needle in key:
+                return label
+        if text[0].isupper():
+            return text
+    return ""
 
 
 def _usage_fetch_cursor_dashboard(token: str) -> dict | None:
@@ -1095,12 +1257,13 @@ def _usage_fetch_cursor_dashboard(token: str) -> dict | None:
     if not isinstance(payload, dict):
         return None
 
-    plan = payload.get("planUsage")
+    body = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+    plan = body.get("planUsage") if isinstance(body.get("planUsage"), dict) else None
     if not isinstance(plan, dict):
         return None
 
     auto_frac, api_frac = _usage_cursor_plan_fractions(plan)
-    reset_raw = payload.get("billingCycleEnd")
+    reset_raw = body.get("billingCycleEnd", body.get("billing_cycle_end"))
     reset_iso = ""
     if reset_raw is not None and str(reset_raw).strip():
         try:
@@ -1140,7 +1303,32 @@ def _usage_fetch_cursor_dashboard(token: str) -> dict | None:
     if not limits:
         return None
 
-    tier = str(payload.get("membershipType") or "").strip()
+    tier = _usage_cursor_tier_label(
+        body.get("membershipType"),
+        body.get("membership_type"),
+        plan.get("membershipType"),
+        plan.get("membership_type"),
+    )
+    info_payload = _usage_cursor_http_json(CURSOR_PLAN_INFO_URL, token)
+    if isinstance(info_payload, dict):
+        info_body = (
+            info_payload.get("result")
+            if isinstance(info_payload.get("result"), dict)
+            else info_payload
+        )
+        info = info_body.get("planInfo") if isinstance(info_body.get("planInfo"), dict) else info_body
+        if isinstance(info, dict):
+            tier = _usage_cursor_tier_label(
+                info.get("planName"),
+                info.get("plan_name"),
+                info.get("membershipType"),
+                info.get("membership_type"),
+                tier,
+            ) or tier
+            if not reset_iso:
+                reset_iso = _usage_cursor_any_to_iso(
+                    info.get("billingCycleEnd", info.get("billing_cycle_end"))
+                )
     record = _usage_base_record("cursor")
     record.update(
         {
@@ -1157,10 +1345,92 @@ def _usage_fetch_cursor_dashboard(token: str) -> dict | None:
 
 
 def _usage_fetch_cursor_live() -> dict | None:
-    token = _usage_read_cursor_access_token()
-    if not token or _usage_jwt_is_expired(token):
+    token = _usage_cursor_bearer()
+    if not token:
         return None
-    return _usage_fetch_cursor_dashboard(token)
+    record = _usage_fetch_cursor_dashboard(token)
+    if record is not None:
+        return record
+    refreshed = _usage_cursor_refresh_access_token(
+        _usage_read_cursor_item(CURSOR_REFRESH_TOKEN_KEY)
+    )
+    if not refreshed or refreshed == token:
+        return None
+    return _usage_fetch_cursor_dashboard(refreshed)
+
+
+def _usage_cursor_sand_usage() -> dict | None:
+    token = _usage_cursor_bearer()
+    payload = _usage_cursor_http_json(CURSOR_SAND_USAGE_URL, token)
+    if payload is None:
+        refreshed = _usage_cursor_refresh_access_token(
+            _usage_read_cursor_item(CURSOR_REFRESH_TOKEN_KEY)
+        )
+        if refreshed:
+            payload = _usage_cursor_http_json(CURSOR_SAND_USAGE_URL, refreshed)
+    if not isinstance(payload, dict):
+        return None
+    body = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+    if not isinstance(body, dict):
+        return None
+    percent = None
+    for key in (
+        "usagePercent",
+        "usage_percent",
+        "percentUsed",
+        "percent_used",
+        "includedUsagePercent",
+        "included_usage_percent",
+        "percent",
+    ):
+        percent = _usage_fraction_from_percent_value(body.get(key))
+        if percent is not None:
+            break
+    if percent is None:
+        return None
+    resets = ""
+    for key in (
+        "nextResetTimestampUtc",
+        "next_reset_timestamp_utc",
+        "nextResetAt",
+        "next_reset_at",
+        "resetAt",
+        "reset_at",
+    ):
+        resets = _usage_cursor_any_to_iso(body.get(key))
+        if resets:
+            break
+    return {"percent": percent, "resets_at": resets}
+
+
+def _usage_collect_grokbot_local() -> dict:
+    record = _usage_base_record("grokbot")
+    sand = _usage_cursor_sand_usage()
+    if sand and sand.get("percent") is not None:
+        limit = {
+            "label": "Weekly usage",
+            "title": "Weekly usage",
+            "percent": sand["percent"],
+        }
+        resets = str(sand.get("resets_at") or "").strip()
+        if resets:
+            limit["resetsAt"] = resets
+        record.update(
+            {
+                "ready": True,
+                "hasLocalStats": True,
+                "usageStatusText": "",
+                "authHelpText": "",
+                "limits": [limit],
+            }
+        )
+        return record
+    record["usageStatusText"] = "Grok Bot usage unavailable"
+    record["authHelpText"] = (
+        "Sign in to Cursor on this laptop, then refresh. "
+        "Grok Bot weekly usage comes from the Cursor spending page."
+    )
+    return record
 
 
 def _usage_merge_model_usage(left: dict, right: dict) -> dict:
@@ -1797,7 +2067,11 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 
 def cmd_ai_usage(refresh: bool = False) -> int:
     missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
-    if refresh or missing:
+    grokbot = _usage_read_record("grokbot")
+    grokbot_limits = grokbot.get("limits") if isinstance(grokbot, dict) else None
+    grokbot_empty = not isinstance(grokbot_limits, list) or not grokbot_limits
+    stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
+    if refresh or missing or grokbot_empty or stale:
         cmd_ai_usage_update()
     agents = [_usage_panel_agent(agent_id, _usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS]
     print(json.dumps({"agents": agents, "updatedAt": _usage_now_iso()}, separators=(",", ":")))
@@ -1812,7 +2086,14 @@ def cmd_ai_usage_update() -> int:
         _usage_run_omarchy_update(("codex",))
 
     grokbot_ok, grokbot_err = _usage_run_collector("grokbot")
-    if not grokbot_ok and _usage_read_record("grokbot") is None:
+    collector_record = _usage_read_record("grokbot")
+    local_bot = _usage_collect_grokbot_local()
+    if isinstance(local_bot.get("limits"), list) and local_bot["limits"]:
+        _usage_write_record("grokbot", local_bot)
+    else:
+        merged = _usage_merge_records(collector_record, local_bot, agent_id="grokbot")
+        _usage_write_record("grokbot", merged)
+    if _usage_read_record("grokbot") is None:
         record = _usage_base_record("grokbot")
         record["usageStatusText"] = "Grok Bot usage unavailable"
         hint = _usage_sanitize_grokbot_text(grokbot_err or omarchy_err or "")
@@ -1837,12 +2118,16 @@ def cmd_ai_usage_update() -> int:
         )
 
         if agent_id == "cursor":
-            stale = _usage_record_is_stale(collector_record)
-            limits = merged.get("limits") if isinstance(merged.get("limits"), list) else []
-            if stale or not limits:
-                live = _usage_fetch_cursor_live()
-                if live is not None:
-                    merged = _usage_merge_records(live, merged, agent_id=agent_id)
+            live = _usage_fetch_cursor_live()
+            if live is not None:
+                live_limits = live.get("limits") if isinstance(live.get("limits"), list) else []
+                if live_limits:
+                    merged["limits"] = live_limits
+                    merged["ready"] = True
+                    if live.get("tierLabel"):
+                        merged["tierLabel"] = live["tierLabel"]
+                    merged["authHelpText"] = live.get("authHelpText") or ""
+                    merged["updatedAt"] = live.get("updatedAt") or merged.get("updatedAt")
 
         _usage_write_record(agent_id, merged)
 

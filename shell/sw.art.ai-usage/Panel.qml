@@ -18,7 +18,8 @@ Panel {
     property var snapshot: ({ agents: [] })
     property bool updating: false
     property bool showSettings: false
-    readonly property string appVersion: "0.5.5-38"
+    readonly property string appVersion: "0.5.5-39"
+    readonly property string backend: Quickshell.env("HOME") + "/.local/lib/omarchy-task-manager/omarchy-task-manager"
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: 300000
@@ -124,7 +125,7 @@ Panel {
                 try { root.snapshot = JSON.parse(l) } catch (e) {}
             }
         }
-        command: ["omarchy-task-manager", "ai-usage"]
+        command: [root.backend, "ai-usage"]
     }
 
     Process {
@@ -135,7 +136,7 @@ Panel {
                 root.refresh()
             }
         }
-        command: ["omarchy-task-manager", "ai-usage-update"]
+        command: [root.backend, "ai-usage-update"]
     }
 
     Timer {

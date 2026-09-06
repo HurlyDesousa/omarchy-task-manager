@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-39** — AI Usage panel calls stable `~/.local/lib/omarchy-task-manager/omarchy-task-manager` backend; `install.sh` installs CLI to `LIB_DST`. Collector polish: Cursor plan info / sand usage / OAuth refresh / tier labels; Grok Bot weekly bar from sand API. `sw.art.cursor` stays off bar (0.5.5-38 fix preserved).
+
 **0.5.5-38** — Stop re-adding `sw.art.cursor` to `bar.layout.*` on install; migrate existing cursor bar entries out on upgrade. Keep `omarchy.tray.hidden` for `Cursor_status_icon_1`. ToggleSwitch/kbd/AI Usage collectors from 0.5.5-37 preserved.
 
 **0.5.5-37** — Cursor usage: live dashboard fetch (spend/limit when percent fields stick low), always run collector then merge local stats, `USAGE_STALE_SECONDS=300`, preserve usage state dir on install, hide duplicate `Cursor_status_icon_1` tray entry. ToggleSwitch/kbd/AI Usage QML / `sw.art.cursor` bar launcher preserved.
