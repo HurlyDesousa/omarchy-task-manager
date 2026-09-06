@@ -253,15 +253,6 @@ Panel {
                         x: Style.space(16)
                         spacing: Style.space(10)
 
-                        function toggleRow(label, detail, checked, toggleHandler) {
-                            return settingToggle.createObject(this, {
-                                labelText: label,
-                                detailText: detail || "",
-                                checked: checked,
-                                toggleHandler: toggleHandler
-                            })
-                        }
-
                         Label {
                             text: "Startup"
                             color: Qt.darker(root.bar.foreground, 1.4)
@@ -270,15 +261,21 @@ Panel {
                             font.letterSpacing: 1
                         }
 
-                        SettingToggle {
-                            labelText: "Start compact"
+                        Toggle {
+                            width: parent.width
+                            label: "Start compact"
                             checked: root.prefs.start_compact === true
-                            toggleHandler: function(v) { root.savePref("start_compact", v) }
+                            foreground: root.bar.foreground
+                            fontFamily: root.bar.fontFamily
+                            onClicked: root.savePref("start_compact", root.prefs.start_compact !== true)
                         }
-                        SettingToggle {
-                            labelText: "Remember last state"
+                        Toggle {
+                            width: parent.width
+                            label: "Remember last state"
                             checked: root.prefs.remember_expand !== false
-                            toggleHandler: function(v) { root.savePref("remember_expand", v) }
+                            foreground: root.bar.foreground
+                            fontFamily: root.bar.fontFamily
+                            onClicked: root.savePref("remember_expand", root.prefs.remember_expand === false)
                         }
 
                         Label {
@@ -318,7 +315,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-32"
+                            text: "Version 0.5.5-35"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -713,50 +710,4 @@ Panel {
         }
     }
 
-    component SettingToggle: RowLayout {
-        property string labelText
-        property string detailText: ""
-        property bool checked
-        property var toggleHandler
-        width: parent ? parent.width : implicitWidth
-        spacing: Style.space(8)
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(2)
-            Label {
-                text: labelText
-                Layout.fillWidth: true
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.bodySmall
-            }
-            Label {
-                visible: detailText !== ""
-                text: detailText
-                Layout.fillWidth: true
-                color: Qt.darker(root.bar.foreground, 1.5)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-            }
-        }
-        Rectangle {
-            Layout.preferredWidth: Style.space(46)
-            Layout.preferredHeight: Style.space(24)
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            radius: Style.space(12)
-            color: checked ? Color.accent : Qt.darker(root.bar.foreground, 2.0)
-            Rectangle {
-                width: Style.space(18); height: Style.space(18); radius: Style.space(9)
-                color: Color.popups.background
-                anchors.verticalCenter: parent.verticalCenter
-                x: checked ? parent.width - width - 3 : 3
-                Behavior on x { NumberAnimation { duration: 120 } }
-            }
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (toggleHandler) toggleHandler(!checked)
-            }
-        }
-    }
 }

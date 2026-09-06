@@ -302,23 +302,23 @@ Panel {
                             Layout.fillWidth: true
                         }
 
-                        SettingToggle {
-                            compact: true
-                            labelless: true
+                        ToggleSwitch {
                             checked: root.kbdEnabled && root.brightness > 0
-                            toggleHandler: function(v) {
-                                if (v) {
+                            foreground: root.bar.foreground
+                            onToggled: {
+                                if (root.kbdEnabled && root.brightness > 0) {
+                                    root.kbdEnabled = false
+                                } else {
                                     root.kbdEnabled = true
                                     if (root.brightness === 0) root.brightness = 100
-                                } else {
-                                    root.kbdEnabled = false
                                 }
                                 root.applyAndSave()
                             }
                         }
 
                         Rectangle {
-                            width: 26; height: 26; radius: Style.cornerRadius
+                            width: Style.space(30); height: Style.space(30)
+                            radius: Style.cornerRadius
                             color: root.showSettings
                                 ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
 
@@ -328,7 +328,7 @@ Panel {
                                 anchors.centerIn: parent
                                 text: "󰒓"
                                 font.family: root.bar.fontFamily
-                                font.pixelSize: Style.font.body
+                                font.pixelSize: Style.font.subtitle
                                 color: root.showSettings
                                     ? Style.hoverStateColor(root.bar.foreground, Color.accent)
                                     : Qt.darker(root.bar.foreground, 1.4)
@@ -548,85 +548,32 @@ Panel {
                         font.letterSpacing: 1
                     }
 
-                    SettingToggle {
+                    Toggle {
                         width: parent.width
-                        labelText: "Autostart"
-                        detailText: "Restore on session"
+                        label: "Autostart"
+                        description: "Restore on session"
                         checked: root.autostart
-                        toggleHandler: function(v) {
-                            root.autostart = v
+                        foreground: root.bar.foreground
+                        fontFamily: root.bar.fontFamily
+                        onClicked: {
+                            root.autostart = !root.autostart
                             saveTimer.restart()
                         }
                     }
 
-                    SettingToggle {
+                    Toggle {
                         width: parent.width
-                        labelText: "Auto-off on idle"
-                        detailText: "Follows display auto-dim (" + root.formatDimTimeout(root.dimTimeoutSeconds) + ")"
+                        label: "Auto-off on idle"
+                        description: "Follows display auto-dim (" + root.formatDimTimeout(root.dimTimeoutSeconds) + ")"
                         checked: root.autoOff
-                        toggleHandler: function(v) {
-                            root.autoOff = v
+                        foreground: root.bar.foreground
+                        fontFamily: root.bar.fontFamily
+                        onClicked: {
+                            root.autoOff = !root.autoOff
                             saveTimer.restart()
                         }
                     }
                 }
-            }
-        }
-    }
-
-    component SettingToggle: RowLayout {
-        property string labelText: ""
-        property string detailText: ""
-        property bool checked
-        property var toggleHandler
-        property bool compact: false
-        property bool labelless: false
-        width: parent ? parent.width : implicitWidth
-        spacing: compact ? Style.space(6) : Style.space(8)
-
-        ColumnLayout {
-            visible: !labelless
-            Layout.fillWidth: !compact
-            spacing: Style.space(2)
-
-            Label {
-                text: labelText
-                Layout.fillWidth: true
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: compact ? Style.font.caption : Style.font.bodySmall
-            }
-            Label {
-                visible: detailText !== ""
-                text: detailText
-                Layout.fillWidth: true
-                color: Qt.darker(root.bar.foreground, 1.5)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-            }
-        }
-
-        Rectangle {
-            Layout.preferredWidth: Style.space(46)
-            Layout.preferredHeight: Style.space(24)
-            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            radius: Style.space(12)
-            color: checked ? Color.accent : Qt.darker(root.bar.foreground, 2.0)
-
-            Behavior on color { ColorAnimation { duration: 120 } }
-
-            Rectangle {
-                width: Style.space(18); height: Style.space(18); radius: Style.space(9)
-                color: Color.popups.background
-                anchors.verticalCenter: parent.verticalCenter
-                x: checked ? parent.width - width - 3 : 3
-                Behavior on x { NumberAnimation { duration: 120 } }
-            }
-
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (toggleHandler) toggleHandler(!checked)
             }
         }
     }
