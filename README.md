@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-37** — Cursor usage: live dashboard fetch (spend/limit when percent fields stick low), always run collector then merge local stats, `USAGE_STALE_SECONDS=300`, preserve usage state dir on install, hide duplicate `Cursor_status_icon_1` tray entry. ToggleSwitch/kbd/AI Usage QML / `sw.art.cursor` bar launcher preserved.
+
 **0.5.5-36** — AI usage panel polish: right-edge popup anchor, live Omarchy theme tokens, settings gear About view, section model metadata rows, warmup + background refresh, themed UsageCard borders and 90% urgent meters. Bluetooth toggles / kbd gear / `ai-usage*` CLI / AI tray preserved.
 
 **0.5.5-35** — Bluetooth-style toggles: kbd header uses bare `ToggleSwitch`; kbd gear + TM settings use `qs.Ui.Toggle` labeled rows; slightly larger RGB gear icon. `ai-usage*` CLI / AI tray / idle.dim `auto_off` bool preserved.
