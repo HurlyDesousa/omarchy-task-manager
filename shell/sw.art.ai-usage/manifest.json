@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.ai-usage",
   "name": "AI Usage",
-  "version": "0.5.5-37",
+  "version": "0.5.5-38",
   "author": "Toby Swart",
   "license": "MIT",
   "description": "Aggregated quota panel for Cursor, Grok Bot, and Grok build subscription agents",

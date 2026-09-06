@@ -63,11 +63,11 @@ omarchy-task-manager ai-usage-update
 
 ## AI tray (launchers + usage)
 
-Four Quickshell plugins install to `~/.config/omarchy/plugins/` and are placed on **`bar.layout.right`** immediately **left of the system-icon cluster** (`omarchy.tray` → agents → bluetooth → network → audio → monitor → `omarchy.power`). Order: cursor → pi-local → grok → ai-usage. `install.sh` migrates any prior `center` or misplaced `right` entries on re-run (idempotent).
+Four Quickshell plugins install to `~/.config/omarchy/plugins/`. **`pi-local`**, **`grok`**, and **`ai-usage`** are placed on **`bar.layout.right`** immediately **left of the system-icon cluster** (`omarchy.tray` → agents → bluetooth → network → audio → monitor → `omarchy.power`). Order: pi-local → grok → ai-usage. `install.sh` migrates any prior `center` or misplaced `right` entries on re-run (idempotent). **`sw.art.cursor`** plugin files are installed but **not** added to the bar layout; existing `sw.art.cursor` bar entries are removed on upgrade.
 
 | Plugin | Bar icon | Action |
 |---|---|---|
-| `sw.art.cursor` | 󱃸 | Launch Cursor (`~/.local/bin/cursor`, fallback `cursor` on PATH) |
+| `sw.art.cursor` | 󱃸 | Plugin files only (not placed on bar); launch via app menu or `cursor` on PATH |
 | `sw.art.pi-local` | π | Terminal: `pi --provider llama-local`; green dot when `http://127.0.0.1:8080/health` is 200 |
 | `sw.art.grok` | 󰬬 | Terminal: local `grok` CLI (mise shim; no xAI API calls from the widget) |
 | `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Grok Bot + Grok build quota bars (excludes local pi) |
@@ -112,6 +112,8 @@ Waybar is **not required**. The primary path is the Quickshell bar widget.
 If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next to `custom/weather`. Clicking it calls `omarchy-task-manager-toggle` (shell IPC). The icon shows a `running` CSS class while the panel is open.
 
 ## Version
+
+**0.5.5-38** — Stop re-adding `sw.art.cursor` to `bar.layout.*` on install; migrate existing cursor bar entries out on upgrade. Keep `omarchy.tray.hidden` for `Cursor_status_icon_1`. ToggleSwitch/kbd/AI Usage collectors from 0.5.5-37 preserved.
 
 **0.5.5-37** — Cursor usage: live dashboard fetch (spend/limit when percent fields stick low), always run collector then merge local stats, `USAGE_STALE_SECONDS=300`, preserve usage state dir on install, hide duplicate `Cursor_status_icon_1` tray entry. ToggleSwitch/kbd/AI Usage QML / `sw.art.cursor` bar launcher preserved.
 

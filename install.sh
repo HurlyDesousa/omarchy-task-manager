@@ -223,9 +223,10 @@ PY
 }
 
 # ── AI tray plugins (cursor / pi-local / grok / ai-usage) ─────────────────────
-# Launchers plus aggregated usage panel.  Patched into bar.layout.right
-# immediately left of the system-icon cluster (before omarchy.tray when present).
-# Migrates center or misplaced right entries (idempotent).
+# pi-local, grok, and ai-usage are patched into bar.layout.right immediately
+# left of the system-icon cluster (before omarchy.tray when present).
+# sw.art.cursor files are installed but never added to bar.layout.*; existing
+# cursor bar entries are removed on upgrade (idempotent).
 
 install_ai_tray_plugins() {
   local entries=(
@@ -256,19 +257,19 @@ install_ai_tray_plugins() {
 patch_shell_json_ai_tray() {
   [[ -f "${SHELL_JSON}" ]] || {
     echo "Note: ${SHELL_JSON} not found; skipping AI tray bar layout patch."
-    echo "      Run: omarchy plugin enable ${CURSOR_PLUGIN_ID}"
-    echo "           omarchy plugin enable ${PILOCAL_PLUGIN_ID}"
+    echo "      Run: omarchy plugin enable ${PILOCAL_PLUGIN_ID}"
     echo "           omarchy plugin enable ${GROK_PLUGIN_ID}"
     echo "           omarchy plugin enable ${AI_USAGE_PLUGIN_ID}"
     return 0
   }
 
-  python3 - "${SHELL_JSON}" \
-      "${CURSOR_PLUGIN_ID}" "${PILOCAL_PLUGIN_ID}" "${GROK_PLUGIN_ID}" "${AI_USAGE_PLUGIN_ID}" <<'PY'
+  python3 - "${SHELL_JSON}" "${CURSOR_PLUGIN_ID}" \
+      "${PILOCAL_PLUGIN_ID}" "${GROK_PLUGIN_ID}" "${AI_USAGE_PLUGIN_ID}" <<'PY'
 import json, sys, pathlib
 
-path    = pathlib.Path(sys.argv[1])
-new_ids = sys.argv[2:]
+path       = pathlib.Path(sys.argv[1])
+cursor_id  = sys.argv[2]
+bar_ids    = sys.argv[3:]
 
 try:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -279,15 +280,31 @@ except Exception as exc:
 layout = data.setdefault("bar", {}).setdefault("layout", {})
 center = layout.setdefault("center", [])
 right  = layout.setdefault("right", [])
+changed = False
 
-migrated_center = [e.get("id") for e in center if e.get("id") in new_ids]
+def remove_ids(entries, ids):
+    removed = [e.get("id") for e in entries if e.get("id") in ids]
+    if removed:
+        entries[:] = [e for e in entries if e.get("id") not in ids]
+    return removed
+
+removed_cursor_center = remove_ids(center, {cursor_id})
+removed_cursor_right = remove_ids(right, {cursor_id})
+if removed_cursor_center or removed_cursor_right:
+    changed = True
+    print(
+        "shell.json: removed cursor bar launcher from layout:"
+        f" center={removed_cursor_center or []} right={removed_cursor_right or []}"
+    )
+
+migrated_center = remove_ids(center, set(bar_ids))
 if migrated_center:
-    center[:] = [e for e in center if e.get("id") not in new_ids]
+    changed = True
     print(f"shell.json: removed AI tray from center: {migrated_center}")
 
-migrated_right = [e.get("id") for e in right if e.get("id") in new_ids]
-right[:] = [e for e in right if e.get("id") not in new_ids]
+migrated_right = remove_ids(right, set(bar_ids))
 if migrated_right:
+    changed = True
     print(f"shell.json: relocated AI tray within right (was: {migrated_right})")
 
 def insert_before_system_cluster(entries):
@@ -308,16 +325,18 @@ def insert_before_system_cluster(entries):
     return 0
 
 insert_at = insert_before_system_cluster(right)
-entries = [{"id": pid} for pid in new_ids]
+entries = [{"id": pid} for pid in bar_ids]
 right[insert_at:insert_at] = entries
+changed = True
 
 anchor = right[insert_at].get("id") if insert_at < len(right) else "end"
-print(f"shell.json: placed AI tray on bar.layout.right before {anchor}: {new_ids}")
+print(f"shell.json: placed AI tray on bar.layout.right before {anchor}: {bar_ids}")
 
-path.write_text(
-    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-    encoding="utf-8",
-)
+if changed:
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 PY
 }
 
@@ -463,10 +482,10 @@ echo "  Bar icon placed immediately left of the clock."
 echo "  State file: ~/.local/state/omarchy/kbd-backlight"
 echo "  (or: omarchy plugin enable ${KBD_PLUGIN_ID})"
 echo "AI tray plugins:"
-echo "  ${CURSOR_PLUGIN_DIR}  (Cursor IDE)"
+echo "  ${CURSOR_PLUGIN_DIR}  (Cursor IDE — plugin files only, not added to bar)"
 echo "  ${PILOCAL_PLUGIN_DIR}  (pi --provider llama-local)"
 echo "  ${GROK_PLUGIN_DIR}  (grok CLI)"
 echo "  ${AI_USAGE_PLUGIN_DIR}  (Cursor/Grok Bot/Grok build quota usage)"
-echo "  Bar icons on bar.layout.right before system cluster: cursor → pi-local → grok → ai-usage"
+echo "  Bar icons on bar.layout.right before system cluster: pi-local → grok → ai-usage"
 echo "  Terminal launcher: xdg-terminal-exec (fallback: ghostty, kitty)"
 echo "  Usage refresh: omarchy-task-manager ai-usage-update"
