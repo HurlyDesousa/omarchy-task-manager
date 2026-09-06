@@ -30,6 +30,7 @@ GROK_PLUGIN_SRC="${ROOT}/shell/${GROK_PLUGIN_ID}"
 AI_USAGE_PLUGIN_ID="sw.art.ai-usage"
 AI_USAGE_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${AI_USAGE_PLUGIN_ID}"
 AI_USAGE_PLUGIN_SRC="${ROOT}/shell/${AI_USAGE_PLUGIN_ID}"
+USAGE_STATE_DIR="${HOME}/.local/state/omarchy/agents/usage"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python)
 
@@ -320,6 +321,42 @@ path.write_text(
 PY
 }
 
+ensure_usage_state_dir() {
+  # Preserve across reinstalls — never delete existing usage JSON on upgrade.
+  mkdir -p "${USAGE_STATE_DIR}"
+}
+
+patch_shell_json_tray_hidden() {
+  [[ -f "${SHELL_JSON}" ]] || return 0
+
+  python3 - "${SHELL_JSON}" <<'PY'
+import json, sys, pathlib
+
+path = pathlib.Path(sys.argv[1])
+hidden_icon = "Cursor_status_icon_1"
+
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Warning: could not parse {path}: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+tray = data.setdefault("omarchy", {}).setdefault("tray", {})
+hidden = tray.setdefault("hidden", [])
+if not isinstance(hidden, list):
+    hidden = []
+    tray["hidden"] = hidden
+
+if hidden_icon not in hidden:
+    hidden.append(hidden_icon)
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(f"shell.json: added {hidden_icon} to omarchy.tray.hidden")
+PY
+}
+
 # ── Waybar integration (optional – skipped when waybar is not configured) ─────
 # Idempotently adds custom/omarchy-task-manager to ~/.config/waybar/config.jsonc
 # (near custom/weather in modules-center) and a margin rule to style.css.
@@ -409,6 +446,8 @@ install_kbd_backlight_plugin
 patch_shell_json_kbd
 install_ai_tray_plugins
 patch_shell_json_ai_tray
+patch_shell_json_tray_hidden
+ensure_usage_state_dir
 upsert_waybar_config
 upsert_waybar_style
 

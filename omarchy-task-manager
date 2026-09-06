@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -12,11 +13,13 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-36"
+APP_VERSION = "0.5.5-37"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -707,6 +710,12 @@ AGENT_USAGE_COLLECTOR_FALLBACKS: dict[str, tuple[str, ...]] = {
     "grokbot": ("codex",),
 }
 USAGE_STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "agents" / "usage"
+USAGE_STALE_SECONDS = 300
+CURSOR_DASHBOARD_USAGE_URL = (
+    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
+)
+CURSOR_ACCESS_TOKEN_KEY = "cursorAuth/accessToken"
+CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-37"
 USAGE_MISSING_HELP: dict[str, tuple[str, str]] = {
     "cursor": (
         "No Cursor usage data yet",
@@ -957,6 +966,263 @@ def _usage_run_collector(agent_id: str) -> tuple[bool, str]:
     if agent_id == "grokbot":
         err = _usage_sanitize_grokbot_text(err)
     return False, err
+
+
+def _usage_parse_updated_at(value: Any) -> float | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
+def _usage_record_is_stale(record: dict | None) -> bool:
+    if not record:
+        return True
+    updated = _usage_parse_updated_at(record.get("updatedAt"))
+    if updated is None:
+        return True
+    return (time.time() - updated) > USAGE_STALE_SECONDS
+
+
+def _usage_jwt_is_expired(token: str) -> bool:
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return True
+    try:
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        exp = payload.get("exp")
+        if exp is None:
+            return False
+        return float(exp) <= time.time()
+    except Exception:
+        return False
+
+
+def _usage_read_cursor_access_token() -> str:
+    for db in _usage_cursor_vscdb_paths():
+        try:
+            import sqlite3
+
+            conn = sqlite3.connect(f"file:{db.resolve()}?mode=ro", uri=True, timeout=3)
+            conn.execute("PRAGMA query_only = ON")
+            row = conn.execute(
+                "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
+                (CURSOR_ACCESS_TOKEN_KEY,),
+            ).fetchone()
+            conn.close()
+        except Exception:
+            continue
+        if not row or row[0] is None:
+            continue
+        value = row[0]
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        token = str(value).strip()
+        if token:
+            return token
+    return ""
+
+
+def _usage_fraction_from_percent_value(value: Any) -> float | None:
+    try:
+        percent = float(value)
+    except (TypeError, ValueError):
+        return None
+    if percent != percent:
+        return None
+    if percent > 1:
+        percent /= 100.0
+    return min(1.0, max(0.0, percent))
+
+
+def _usage_cursor_plan_fractions(plan: dict) -> tuple[float | None, float | None]:
+    """Prefer spend/limit over dashboard percent fields (often stuck near 1%)."""
+    auto_frac: float | None = None
+    api_frac: float | None = None
+    try:
+        limit = float(plan.get("limit") or 0)
+    except (TypeError, ValueError):
+        limit = 0.0
+    if limit > 0:
+        try:
+            included = float(plan.get("includedSpend") or 0)
+            if included >= 0:
+                auto_frac = min(1.0, max(0.0, included / limit))
+        except (TypeError, ValueError):
+            pass
+        try:
+            total = float(plan.get("totalSpend") or 0)
+            included = float(plan.get("includedSpend") or 0)
+            api_spend = max(0.0, total - included)
+            if api_spend >= 0:
+                api_frac = min(1.0, max(0.0, api_spend / limit))
+        except (TypeError, ValueError):
+            pass
+    if auto_frac is None:
+        auto_frac = _usage_fraction_from_percent_value(plan.get("autoPercentUsed"))
+    if api_frac is None:
+        api_frac = _usage_fraction_from_percent_value(plan.get("apiPercentUsed"))
+    return auto_frac, api_frac
+
+
+def _usage_fetch_cursor_dashboard(token: str) -> dict | None:
+    request = urllib.request.Request(
+        CURSOR_DASHBOARD_USAGE_URL,
+        data=b"{}",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Connect-Protocol-Version": "1",
+            "User-Agent": CURSOR_DASHBOARD_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    plan = payload.get("planUsage")
+    if not isinstance(plan, dict):
+        return None
+
+    auto_frac, api_frac = _usage_cursor_plan_fractions(plan)
+    reset_raw = payload.get("billingCycleEnd")
+    reset_iso = ""
+    if reset_raw is not None and str(reset_raw).strip():
+        try:
+            if isinstance(reset_raw, (int, float)):
+                ts = float(reset_raw)
+                if ts > 1_000_000_000_000:
+                    ts /= 1000.0
+                reset_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+            else:
+                text = str(reset_raw).strip()
+                if text.endswith("Z"):
+                    reset_iso = text
+                elif text:
+                    reset_iso = text + "Z" if "T" in text else text + "T00:00:00Z"
+        except (TypeError, ValueError, OSError):
+            reset_iso = ""
+
+    limits: list[dict] = []
+    if auto_frac is not None:
+        limits.append(
+            {
+                "label": "Cursor Models",
+                "title": "Cursor Models",
+                "percent": auto_frac,
+                "resetsAt": reset_iso,
+            }
+        )
+    if api_frac is not None:
+        limits.append(
+            {
+                "label": "Other Models",
+                "title": "Other Models",
+                "percent": api_frac,
+                "resetsAt": reset_iso,
+            }
+        )
+    if not limits:
+        return None
+
+    tier = str(payload.get("membershipType") or "").strip()
+    record = _usage_base_record("cursor")
+    record.update(
+        {
+            "ready": True,
+            "hasLocalStats": False,
+            "usageStatusText": "",
+            "authHelpText": "Live Cursor dashboard quota",
+            "limits": limits,
+            "tierLabel": tier,
+            "updatedAt": _usage_now_iso(),
+        }
+    )
+    return record
+
+
+def _usage_fetch_cursor_live() -> dict | None:
+    token = _usage_read_cursor_access_token()
+    if not token or _usage_jwt_is_expired(token):
+        return None
+    return _usage_fetch_cursor_dashboard(token)
+
+
+def _usage_merge_model_usage(left: dict, right: dict) -> dict:
+    merged = {key: dict(value) for key, value in left.items() if isinstance(value, dict)}
+    for model, bucket in right.items():
+        if not isinstance(bucket, dict):
+            continue
+        target = merged.setdefault(
+            model,
+            {
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+            },
+        )
+        for field in target:
+            target[field] = _usage_number(target.get(field)) + _usage_number(bucket.get(field))
+    return merged
+
+
+def _usage_merge_records(
+    primary: dict | None,
+    secondary: dict | None,
+    *,
+    agent_id: str,
+) -> dict:
+    if primary is None and secondary is None:
+        return _usage_base_record(agent_id)
+    if primary is None:
+        return dict(secondary or _usage_base_record(agent_id))
+    if secondary is None:
+        return dict(primary)
+
+    merged = dict(primary)
+    primary_limits = primary.get("limits") if isinstance(primary.get("limits"), list) else []
+    secondary_limits = secondary.get("limits") if isinstance(secondary.get("limits"), list) else []
+    if secondary_limits and (not primary_limits or _usage_record_score(secondary) > _usage_record_score(primary)):
+        merged["limits"] = secondary_limits
+    elif primary_limits:
+        merged["limits"] = primary_limits
+
+    for field in ("tierLabel", "usageStatusText", "authHelpText"):
+        if not str(merged.get(field) or "").strip() and str(secondary.get(field) or "").strip():
+            merged[field] = secondary[field]
+
+    for field in ("todayTotalTokens", "todayPrompts", "todaySessions"):
+        merged[field] = max(_usage_number(merged.get(field)), _usage_number(secondary.get(field)))
+
+    left_models = merged.get("modelUsage") if isinstance(merged.get("modelUsage"), dict) else {}
+    right_models = secondary.get("modelUsage") if isinstance(secondary.get("modelUsage"), dict) else {}
+    if right_models:
+        merged["modelUsage"] = _usage_merge_model_usage(left_models, right_models)
+
+    merged["ready"] = bool(merged.get("ready")) or bool(secondary.get("ready"))
+    merged["hasLocalStats"] = bool(merged.get("hasLocalStats")) or bool(secondary.get("hasLocalStats"))
+
+    primary_updated = _usage_parse_updated_at(primary.get("updatedAt"))
+    secondary_updated = _usage_parse_updated_at(secondary.get("updatedAt"))
+    if secondary_updated is not None and (primary_updated is None or secondary_updated > primary_updated):
+        merged["updatedAt"] = secondary.get("updatedAt")
+    return merged
 
 
 def _usage_run_omarchy_update(agents: tuple[str, ...]) -> str:
@@ -1561,9 +1827,24 @@ def cmd_ai_usage_update() -> int:
         ("cursor", _usage_collect_cursor_local),
         ("grok", _usage_collect_grok_local),
     ):
-        ext_ok, _ = _usage_run_collector(agent_id)
-        if not ext_ok:
-            _usage_write_record(agent_id, local_collector())
+        _usage_run_collector(agent_id)
+        collector_record = _usage_read_record(agent_id)
+        local_record = local_collector()
+        merged = _usage_merge_records(
+            collector_record,
+            local_record,
+            agent_id=agent_id,
+        )
+
+        if agent_id == "cursor":
+            stale = _usage_record_is_stale(collector_record)
+            limits = merged.get("limits") if isinstance(merged.get("limits"), list) else []
+            if stale or not limits:
+                live = _usage_fetch_cursor_live()
+                if live is not None:
+                    merged = _usage_merge_records(live, merged, agent_id=agent_id)
+
+        _usage_write_record(agent_id, merged)
 
     return 0
 
