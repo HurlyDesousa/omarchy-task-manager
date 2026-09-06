@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DST="${HOME}/.local/bin/omarchy-task-manager"
+LIB_DST="${HOME}/.local/lib/omarchy-task-manager/omarchy-task-manager"
 TOGGLE_DST="${HOME}/.local/bin/omarchy-task-manager-toggle"
 WAYBAR_EXEC_DST="${HOME}/.local/bin/omarchy-task-manager-waybar"
 DESKTOP_DST="${HOME}/.local/share/applications/omarchy-task-manager.desktop"
@@ -445,6 +446,7 @@ upsert_waybar_style() {
 install_deps
 
 install -Dm755 "${ROOT}/omarchy-task-manager"        "${BIN_DST}"
+install -Dm755 "${ROOT}/omarchy-task-manager"        "${LIB_DST}"
 install -Dm755 "${ROOT}/omarchy-task-manager-toggle"  "${TOGGLE_DST}"
 install -Dm755 "${ROOT}/omarchy-task-manager-waybar"  "${WAYBAR_EXEC_DST}"
 
