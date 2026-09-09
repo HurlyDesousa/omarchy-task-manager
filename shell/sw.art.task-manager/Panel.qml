@@ -109,8 +109,6 @@ Panel {
         return Math.max(0, Math.min(1, n / 100))
     }
 
-    Component.onCompleted: loadPrefs()
-
     Process {
         id: statsProc
         stdout: SplitParser {
@@ -315,7 +313,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-39"
+                            text: "Version 0.5.5-43"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall

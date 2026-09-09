@@ -62,7 +62,7 @@ Panel {
 
     function open() {
         root.controller.show()
-        updateAndRefresh()
+        refresh()
     }
 
     function openFromHotkey() {
@@ -144,21 +144,12 @@ Panel {
     }
 
     Timer {
-        id: warmupTimer
-        interval: 1500
-        repeat: false
-        running: true
-        triggeredOnStart: false
-        onTriggered: root.updateAndRefresh()
-    }
-
-    Timer {
         id: refreshTimer
         interval: root.refreshMs
         repeat: true
-        running: true
+        running: root.opened
         triggeredOnStart: false
-        onTriggered: root.updateAndRefresh()
+        onTriggered: root.refresh()
     }
 
     KeyboardPanel {
