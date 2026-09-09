@@ -23,6 +23,7 @@ Panel {
     property var snapshot: ({})
     property var prefs: ({})
     property var processModel: []
+    property bool pendingExpandApply: false
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: {
@@ -32,9 +33,8 @@ Panel {
 
     function open() {
         root.controller.show()
+        root.pendingExpandApply = true
         loadPrefs()
-        applyStartupExpand()
-        refresh()
     }
 
     function openFromHotkey() {
@@ -127,7 +127,11 @@ Panel {
             onRead: function(line) {
                 var l = line.trim()
                 if (!l) return
-                try { root.prefs = JSON.parse(l) } catch (e) {}
+                try { root.prefs = JSON.parse(l) } catch (e) { return }
+                if (root.pendingExpandApply) {
+                    root.pendingExpandApply = false
+                    root.applyStartupExpand()
+                }
             }
         }
         command: ["omarchy-task-manager", "prefs-get"]
