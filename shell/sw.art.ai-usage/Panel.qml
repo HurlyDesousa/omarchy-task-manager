@@ -1,7 +1,8 @@
-// AI Usage panel — Cursor Pro+ / Grok Bot / Grok build quota bars.
+// AI Usage panel — Cursor Pro+ / Grok Bot / SuperGrok quota bars.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -18,9 +19,8 @@ Panel {
     property var snapshot: ({ agents: [] })
     property bool updating: false
     property bool showSettings: false
-    property bool warmupDone: false
-    readonly property string appVersion: "0.5.5-40"
-    readonly property string backend: Quickshell.env("HOME") + "/.local/lib/omarchy-task-manager/omarchy-task-manager"
+    readonly property string appVersion: "0.5.5-43"
+    readonly property string taskManagerBin: Quickshell.env("HOME") + "/.local/bin/omarchy-task-manager"
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: 300000
@@ -62,9 +62,7 @@ Panel {
 
     function open() {
         root.controller.show()
-        root.refresh()
-        if (!root.warmupDone)
-            warmupTimer.restart()
+        updateAndRefresh()
     }
 
     function openFromHotkey() {
@@ -82,11 +80,14 @@ Panel {
     }
 
     function refresh() {
-        if (!usageProc.running) usageProc.running = true
+        if (usageProc.running)
+            usageProc.running = false
+        usageProc.running = true
     }
 
     function updateAndRefresh() {
-        if (updateProc.running) return
+        if (updateProc.running)
+            updateProc.running = false
         root.updating = true
         updateProc.running = true
     }
@@ -128,7 +129,7 @@ Panel {
                 try { root.snapshot = JSON.parse(l) } catch (e) {}
             }
         }
-        command: [root.backend, "ai-usage"]
+        command: [root.taskManagerBin, "ai-usage"]
     }
 
     Process {
@@ -139,26 +140,23 @@ Panel {
                 root.refresh()
             }
         }
-        command: [root.backend, "ai-usage-update"]
+        command: [root.taskManagerBin, "ai-usage-update"]
     }
 
     Timer {
         id: warmupTimer
-        interval: 20000
+        interval: 1500
         repeat: false
-        running: false
+        running: true
         triggeredOnStart: false
-        onTriggered: {
-            root.warmupDone = true
-            root.updateAndRefresh()
-        }
+        onTriggered: root.updateAndRefresh()
     }
 
     Timer {
         id: refreshTimer
         interval: root.refreshMs
         repeat: true
-        running: root.opened
+        running: true
         triggeredOnStart: false
         onTriggered: root.updateAndRefresh()
     }
@@ -698,7 +696,7 @@ Panel {
 
         SectionNameRow {
             width: parent.width
-            titleText: "Grok (chat and build)"
+            titleText: "SuperGrok"
             modelMeta: root.grokBuildModelMeta
         }
 
