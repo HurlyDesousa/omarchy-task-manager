@@ -226,6 +226,27 @@ Panel {
         saveTimer.restart()
     }
 
+    // Stay Awake pattern: left-click on the bar icon toggles power.
+    function toggleBacklight() {
+        if (root.kbdEnabled && root.brightness > 0) {
+            root.kbdEnabled = false
+        } else {
+            root.kbdEnabled = true
+            if (root.brightness === 0) root.brightness = 100
+        }
+        root.applyAndSave()
+    }
+
+    function openOptions() {
+        root.showSettings = false
+        if (!root.opened) root.open()
+    }
+
+    function closeOptions() {
+        root.showSettings = false
+        if (root.opened) root.close()
+    }
+
     // Validate and normalise a hex string to lowercase #rrggbb, or return null.
     function normaliseHex(s) {
         s = s.trim().toLowerCase()
@@ -250,14 +271,14 @@ Panel {
         tooltipText: (root.kbdEnabled && root.brightness > 0)
             ? ("Keyboard: " + root.actualHex + " @ " + root.brightness + "%")
             : "Keyboard: off"
-        // Use root.toggle() so the KeyboardPanel (layer-shell) opens/closes via
-        // Panel.panelController — not a QtQuick.Controls Popup.
+        // Stay Awake pattern: left-click toggles on/off; right-click opens options.
         onPressed: function(b) {
-            if (b !== Qt.RightButton) {
-                // Reset settings view on close so next open starts on main panel.
-                if (root.opened) root.showSettings = false
-                root.toggle()
+            if (b === Qt.RightButton) {
+                if (root.opened) root.closeOptions()
+                else root.openOptions()
+                return
             }
+            root.toggleBacklight()
         }
     }
 
@@ -305,15 +326,7 @@ Panel {
                         ToggleSwitch {
                             checked: root.kbdEnabled && root.brightness > 0
                             foreground: root.bar.foreground
-                            onToggled: {
-                                if (root.kbdEnabled && root.brightness > 0) {
-                                    root.kbdEnabled = false
-                                } else {
-                                    root.kbdEnabled = true
-                                    if (root.brightness === 0) root.brightness = 100
-                                }
-                                root.applyAndSave()
-                            }
+                            onToggled: root.toggleBacklight()
                         }
 
                         Rectangle {
