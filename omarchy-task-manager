@@ -1281,10 +1281,6 @@ def _usage_fetch_cursor_dashboard(token: str) -> dict | None:
         auto_frac = plan_auto
     if api_frac is None:
         api_frac = plan_api
-    if auto_frac is None:
-        auto_frac = 0.0
-    if api_frac is None:
-        api_frac = 0.0
     reset_raw = body.get("billingCycleEnd", body.get("billing_cycle_end"))
     reset_iso = ""
     if reset_raw is not None and str(reset_raw).strip():
@@ -2551,11 +2547,8 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 def cmd_ai_usage(refresh: bool = False) -> int:
     _ensure_usage_imports()
     missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
-    grokbot = _usage_read_record("grokbot")
-    grokbot_limits = grokbot.get("limits") if isinstance(grokbot, dict) else None
-    grokbot_empty = not isinstance(grokbot_limits, list) or not grokbot_limits
     stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
-    if refresh or missing or grokbot_empty or stale:
+    if refresh or missing or stale:
         cmd_ai_usage_update()
     agents = [_usage_panel_agent(agent_id, _usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS]
     print(json.dumps({"agents": agents, "updatedAt": _usage_now_iso()}, separators=(",", ":")))
