@@ -4,19 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import re
 import shutil
 import signal
-import struct
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -61,6 +56,16 @@ try:
     PAGE_SIZE = int(os.sysconf("SC_PAGE_SIZE"))
 except (OSError, ValueError):
     PAGE_SIZE = 4096
+
+
+def _ensure_usage_imports() -> None:
+    """Load network/protobuf helpers only for ai-usage, not snapshot/prefs."""
+    global urllib, base64, struct
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    import base64
+    import struct
 
 
 def load_prefs() -> dict:
@@ -2544,6 +2549,7 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 
 
 def cmd_ai_usage(refresh: bool = False) -> int:
+    _ensure_usage_imports()
     missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
     grokbot = _usage_read_record("grokbot")
     grokbot_limits = grokbot.get("limits") if isinstance(grokbot, dict) else None
@@ -2557,6 +2563,7 @@ def cmd_ai_usage(refresh: bool = False) -> int:
 
 
 def cmd_ai_usage_update() -> int:
+    _ensure_usage_imports()
     USAGE_STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     omarchy_err = _usage_run_omarchy_update(("grokbot",))
