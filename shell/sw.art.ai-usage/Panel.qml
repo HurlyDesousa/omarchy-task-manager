@@ -19,7 +19,8 @@ Panel {
     property var snapshot: ({ agents: [] })
     property bool updating: false
     property bool showSettings: false
-    readonly property string appVersion: "0.5.5-43"
+    property bool backgroundUpdateTried: false
+    readonly property string appVersion: "0.5.5-44"
     readonly property string taskManagerBin: Quickshell.env("HOME") + "/.local/bin/omarchy-task-manager"
 
     readonly property string emDash: "\u2014"
@@ -62,6 +63,7 @@ Panel {
 
     function open() {
         root.controller.show()
+        root.backgroundUpdateTried = false
         refresh()
     }
 
@@ -126,7 +128,11 @@ Panel {
             onRead: function(line) {
                 var l = line.trim()
                 if (!l) return
-                try { root.snapshot = JSON.parse(l) } catch (e) {}
+                try { root.snapshot = JSON.parse(l) } catch (e) { return }
+                if (root.opened && root.snapshot.stale === true && !root.backgroundUpdateTried && !root.updating) {
+                    root.backgroundUpdateTried = true
+                    root.updateAndRefresh()
+                }
             }
         }
         command: [root.taskManagerBin, "ai-usage"]
@@ -149,7 +155,10 @@ Panel {
         repeat: true
         running: root.opened
         triggeredOnStart: false
-        onTriggered: root.refresh()
+        onTriggered: {
+            root.backgroundUpdateTried = false
+            root.refresh()
+        }
     }
 
     KeyboardPanel {
