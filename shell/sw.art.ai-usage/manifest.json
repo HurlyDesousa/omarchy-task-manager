@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sw.art.ai-usage",
   "name": "AI Usage",
-  "version": "0.5.5-43",
+  "version": "0.5.5-41",
   "author": "Hurly",
   "license": "MIT",
   "description": "Aggregated quota panel for Cursor, Grok Bot, and SuperGrok",
