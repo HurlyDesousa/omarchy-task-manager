@@ -1,4 +1,4 @@
-# Maintainer: Toby Swart <toby@s-w.art>
+# Maintainer: Hurly <toby@s-w.art>
 pkgname=omarchy-task-manager
 pkgver=0.5.5
 pkgrel=39
