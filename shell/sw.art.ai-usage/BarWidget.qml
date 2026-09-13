@@ -6,9 +6,12 @@ import qs.Ui
 // Weather / Task Manager bar-widget pattern: Loader → Panel.qml, injectPanel, togglePanel.
 // Hit area constrained to icon slot (no anchors.fill on BarIconButton).
 // Popup is pinned to the right screen edge (not centered on the bar).
+// Panel is created on first open so collectors are not compiled at login.
 BarWidget {
     id: root
     moduleName: "sw.art.ai-usage"
+
+    property string pendingPanelAction: ""
 
     function pinRightAnchor() {
         var win = button.QsWindow ? button.QsWindow.window : null
@@ -30,8 +33,24 @@ BarWidget {
         if ("hostWidget" in target) target.hostWidget = root
     }
 
+    function runPanelAction(action) {
+        if (!action)
+            return
+        if (!panelLoader.item) {
+            root.pendingPanelAction = action
+            panelLoader.active = true
+            return
+        }
+        var item = panelLoader.item
+        if (action === "toggle" && item.toggle) item.toggle()
+        else if (action === "open" && item.openFromHotkey) item.openFromHotkey()
+        else if (action === "close" && item.close) item.close()
+        else if (action === "closeForPopoutSwitch" && item.closeForPopoutSwitch)
+            item.closeForPopoutSwitch()
+    }
+
     function togglePanel() {
-        if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
+        root.runPanelAction("toggle")
     }
 
     function switchPanel(direction) {
@@ -43,8 +62,7 @@ BarWidget {
     readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 
     function open() {
-        if (panelLoader.item && panelLoader.item.openFromHotkey)
-            panelLoader.item.openFromHotkey()
+        root.runPanelAction("open")
     }
 
     function close() {
@@ -75,12 +93,15 @@ BarWidget {
 
     Loader {
         id: panelLoader
-        active: true
+        active: false
         source: Qt.resolvedUrl("Panel.qml")
         visible: false
         onLoaded: {
             root.injectPanel()
-            Qt.callLater(root.injectPanel)
+            var action = root.pendingPanelAction
+            root.pendingPanelAction = ""
+            if (action)
+                Qt.callLater(function() { root.runPanelAction(action) })
         }
     }
 
@@ -88,7 +109,7 @@ BarWidget {
         id: button
         bar: root.bar
         text: "󰚩"
-        tooltipText: "AI usage (Cursor, Grok Bot, Grok build)"
+        tooltipText: "AI usage (Cursor, Grok Bot, SuperGrok)"
         onPressed: function(b) {
             if (b !== Qt.RightButton) {
                 if (root.opened && panelLoader.item) panelLoader.item.showSettings = false

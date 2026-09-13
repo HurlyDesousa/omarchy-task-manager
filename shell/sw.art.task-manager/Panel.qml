@@ -23,8 +23,7 @@ Panel {
     property var snapshot: ({})
     property var prefs: ({})
     property var processModel: []
-    property bool expandAppliedForOpen: false
-    property bool expandUserToggled: false
+    property bool pendingExpandApply: false
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: {
@@ -34,10 +33,8 @@ Panel {
 
     function open() {
         root.controller.show()
-        root.expandAppliedForOpen = false
-        root.expandUserToggled = false
+        root.pendingExpandApply = true
         loadPrefs()
-        refresh()
     }
 
     function openFromHotkey() {
@@ -116,8 +113,6 @@ Panel {
         return Math.max(0, Math.min(1, n / 100))
     }
 
-    Component.onCompleted: loadPrefs()
-
     Process {
         id: statsProc
         stdout: SplitParser {
@@ -136,11 +131,11 @@ Panel {
             onRead: function(line) {
                 var l = line.trim()
                 if (!l) return
-                try {
-                    root.prefs = JSON.parse(l)
-                    if (root.opened && !root.expandAppliedForOpen && !root.expandUserToggled)
-                        root.applyStartupExpand()
-                } catch (e) {}
+                try { root.prefs = JSON.parse(l) } catch (e) { return }
+                if (root.pendingExpandApply) {
+                    root.pendingExpandApply = false
+                    root.applyStartupExpand()
+                }
             }
         }
         command: ["omarchy-task-manager", "prefs-get"]
@@ -326,7 +321,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-40"
+                            text: "Version 0.5.5-43"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
