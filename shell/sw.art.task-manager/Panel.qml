@@ -2,6 +2,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -24,7 +25,10 @@ Panel {
     property var prefs: ({})
     property var processModel: []
     property bool pendingExpandApply: false
+    property bool expandAppliedForOpen: false
+    property bool expandUserToggled: false
 
+    readonly property string taskManagerBin: Quickshell.env("HOME") + "/.local/bin/omarchy-task-manager"
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: {
         var ms = Number(prefs.refresh_ms)
@@ -34,6 +38,8 @@ Panel {
     function open() {
         root.controller.show()
         root.pendingExpandApply = true
+        root.expandAppliedForOpen = false
+        root.expandUserToggled = false
         loadPrefs()
     }
 
@@ -77,7 +83,7 @@ Panel {
     function savePref(key, value) {
         var v = value
         if (typeof value === "boolean") v = value ? "true" : "false"
-        savePrefProc.command = ["omarchy-task-manager", "prefs-set", key, String(v)]
+        savePrefProc.command = [root.taskManagerBin, "prefs-set", key, String(v)]
         savePrefProc.running = true
     }
 
@@ -101,6 +107,7 @@ Panel {
 
     onSnapshotChanged: rebuildProcessModel()
     onFilterTextChanged: rebuildProcessModel()
+    onExpandedChanged: if (root.opened) root.refresh()
 
     function statText(value, suffix) {
         if (value === null || value === undefined) return root.emDash
@@ -122,7 +129,7 @@ Panel {
                 try { root.snapshot = JSON.parse(l) } catch (e) {}
             }
         }
-        command: ["omarchy-task-manager", "snapshot"]
+        command: [root.taskManagerBin, "snapshot"].concat(root.expanded ? [] : ["--no-processes"])
     }
 
     Process {
@@ -138,7 +145,7 @@ Panel {
                 }
             }
         }
-        command: ["omarchy-task-manager", "prefs-get"]
+        command: [root.taskManagerBin, "prefs-get"]
     }
 
     Process {
@@ -321,7 +328,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-43"
+                            text: "Version 0.5.5-41"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -578,7 +585,7 @@ Panel {
                                             enabled: root.selectedPid > 0
                                             cursorShape: Qt.PointingHandCursor
                                             onClicked: {
-                                                killProc.command = ["omarchy-task-manager", "kill", String(root.selectedPid)]
+                                                killProc.command = [root.taskManagerBin, "kill", String(root.selectedPid)]
                                                 killProc.running = true
                                                 root.selectedPid = -1
                                                 procList.currentIndex = -1

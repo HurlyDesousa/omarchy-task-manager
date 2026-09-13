@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-43"
+APP_VERSION = "0.5.5-41"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -99,9 +100,21 @@ def load_stats_state() -> dict:
 def save_stats_state(state: dict) -> None:
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        STATS_STATE_FILE.write_text(json.dumps(state) + "\n", encoding="utf-8")
+        tmp = STATE_DIR / f".stats-state.{os.getpid()}.tmp"
+        payload = json.dumps(state) + "\n"
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(STATS_STATE_FILE)
     except Exception:
         pass
+
+
+def _stats_state_lock():
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_DIR / "stats-state.lock"
+    lock_path.touch(exist_ok=True)
+    fh = open(lock_path, "w", encoding="utf-8")
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    return fh
 
 
 def _read_autostart_enabled() -> bool:
@@ -132,11 +145,9 @@ def _set_autostart(enabled: bool) -> str:
 
         if enabled:
             launch_line = f'o.launch_on_start("{APP_BINARY}")'
-            window_line = f'o.window("{APP_ID}", {{ float = true }})'
             new_block = (
                 f"{AUTOSTART_BLOCK_BEGIN}\n"
                 f"{launch_line}\n"
-                f"{window_line}\n"
                 f"{AUTOSTART_BLOCK_END}\n"
             )
             if has_block:
@@ -144,12 +155,13 @@ def _set_autostart(enabled: bool) -> str:
                 _window_re = re.compile(
                     r'o\.window\s*\(\s*["\']' + re.escape(APP_ID) + r'["\']'
                 )
-                if (
-                    re.search(r"o\.launch_on_start\s*\(", block_inner)
-                    and _window_re.search(block_inner)
-                ):
-                    return ""
-                text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
+                if re.search(r"o\.launch_on_start\s*\(", block_inner):
+                    if _window_re.search(block_inner):
+                        text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
+                    else:
+                        return ""
+                else:
+                    text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
             else:
                 text = text.rstrip() + "\n\n" + new_block
         elif has_block:
@@ -542,8 +554,19 @@ def kill_process(pid: int) -> tuple[bool, str]:
     return True, ""
 
 
-def build_snapshot() -> dict:
-    state = load_stats_state()
+def build_snapshot(*, include_processes: bool = True) -> dict:
+    lock_fh = None
+    try:
+        lock_fh = _stats_state_lock()
+        state = load_stats_state()
+        return _build_snapshot_locked(state, include_processes=include_processes)
+    finally:
+        if lock_fh is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            lock_fh.close()
+
+
+def _build_snapshot_locked(state: dict, *, include_processes: bool = True) -> dict:
     overall, cores = read_proc_stat()
     prev_overall = state.get("prev_overall")
     prev_overall_t = tuple(prev_overall) if isinstance(prev_overall, list) and len(prev_overall) == 2 else None
@@ -582,33 +605,35 @@ def build_snapshot() -> dict:
     processes = []
     if overall is not None:
         total_jiffies = overall[0] + overall[1]
-        ncpu = max(1, len(cores))
-        d_total = (total_jiffies - prev_total) if isinstance(prev_total, int) else 0
-        next_proc: dict[str, int] = {}
-        for pid, name, jiffies, rss, starttime in iter_processes():
-            key = f"{pid}:{starttime}"
-            cpu = 0.0
-            prev = prev_proc.get(key)
-            if prev is not None and d_total > 0:
-                cpu = max(0.0, 100.0 * (jiffies - prev) / d_total * ncpu)
-            next_proc[key] = jiffies
-            processes.append(
-                {
-                    "pid": pid,
-                    "name": name,
-                    "cpu": round(cpu),
-                    "cpu_txt": f"{round(cpu)}",
-                    "rss": rss,
-                    "rss_txt": fmt_bytes(rss),
-                    "starttime": starttime,
-                }
-            )
-        processes.sort(key=lambda row: (-row["cpu"], -row["rss"], row["name"].lower()))
+        if include_processes:
+            ncpu = max(1, len(cores))
+            d_total = (total_jiffies - prev_total) if isinstance(prev_total, int) else 0
+            next_proc: dict[str, int] = {}
+            for pid, name, jiffies, rss, starttime in iter_processes():
+                key = f"{pid}:{starttime}"
+                cpu = 0.0
+                prev = prev_proc.get(key)
+                if prev is not None and d_total > 0:
+                    cpu = max(0.0, 100.0 * (jiffies - prev) / d_total * ncpu)
+                next_proc[key] = jiffies
+                processes.append(
+                    {
+                        "pid": pid,
+                        "name": name,
+                        "cpu": round(cpu),
+                        "cpu_txt": f"{round(cpu)}",
+                        "rss": rss,
+                        "rss_txt": fmt_bytes(rss),
+                        "starttime": starttime,
+                    }
+                )
+            processes.sort(key=lambda row: (-row["cpu"], -row["rss"], row["name"].lower()))
+            state["prev_proc"] = next_proc
         state["prev_total_jiffies"] = total_jiffies
-        state["prev_proc"] = next_proc
     else:
         state["prev_total_jiffies"] = None
-        state["prev_proc"] = {}
+        if include_processes:
+            state["prev_proc"] = {}
 
     if overall is not None:
         state["prev_overall"] = [overall[0], overall[1]]
@@ -648,8 +673,8 @@ def build_snapshot() -> dict:
     }
 
 
-def cmd_snapshot() -> int:
-    print(json.dumps(build_snapshot(), separators=(",", ":")))
+def cmd_snapshot(*, include_processes: bool = True) -> int:
+    print(json.dumps(build_snapshot(include_processes=include_processes), separators=(",", ":")))
     return 0
 
 
@@ -729,7 +754,7 @@ CURSOR_OAUTH_TOKEN_URL = "https://api2.cursor.sh/oauth/token"
 CURSOR_OAUTH_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 CURSOR_ACCESS_TOKEN_KEY = "cursorAuth/accessToken"
 CURSOR_REFRESH_TOKEN_KEY = "cursorAuth/refreshToken"
-CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-39"
+CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-41"
 CURSOR_TIER_LABELS = {
     "pro_plus": "Pro+",
     "pro-plus": "Pro+",
@@ -2545,13 +2570,21 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 
 
 def cmd_ai_usage(refresh: bool = False) -> int:
-    _ensure_usage_imports()
     missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
     stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
-    if refresh or missing or stale:
+    if refresh:
         cmd_ai_usage_update()
+        missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
+        stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
     agents = [_usage_panel_agent(agent_id, _usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS]
-    print(json.dumps({"agents": agents, "updatedAt": _usage_now_iso()}, separators=(",", ":")))
+    print(json.dumps(
+        {
+            "agents": agents,
+            "updatedAt": _usage_now_iso(),
+            "stale": bool(missing or stale),
+        },
+        separators=(",", ":"),
+    ))
     return 0
 
 
@@ -2627,7 +2660,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=APP_VERSION)
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("snapshot", help="Emit JSON stats snapshot")
+    snapshot_p = sub.add_parser("snapshot", help="Emit JSON stats snapshot")
+    snapshot_p.add_argument(
+        "--no-processes",
+        action="store_true",
+        help="Skip /proc process walk (compact panel)",
+    )
     kill_p = sub.add_parser("kill", help="Terminate a process (SIGTERM then SIGKILL)")
     kill_p.add_argument("pid", type=int)
 
@@ -2653,7 +2691,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "snapshot":
-        return cmd_snapshot()
+        return cmd_snapshot(include_processes=not args.no_processes)
     if args.command == "kill":
         return cmd_kill(args.pid)
     if args.command == "prefs-get":
