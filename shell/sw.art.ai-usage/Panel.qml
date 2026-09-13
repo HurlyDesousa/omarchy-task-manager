@@ -18,7 +18,8 @@ Panel {
     property var snapshot: ({ agents: [] })
     property bool updating: false
     property bool showSettings: false
-    readonly property string appVersion: "0.5.5-39"
+    property bool warmupDone: false
+    readonly property string appVersion: "0.5.5-40"
     readonly property string backend: Quickshell.env("HOME") + "/.local/lib/omarchy-task-manager/omarchy-task-manager"
 
     readonly property string emDash: "\u2014"
@@ -61,7 +62,9 @@ Panel {
 
     function open() {
         root.controller.show()
-        updateAndRefresh()
+        root.refresh()
+        if (!root.warmupDone)
+            warmupTimer.restart()
     }
 
     function openFromHotkey() {
@@ -143,16 +146,19 @@ Panel {
         id: warmupTimer
         interval: 20000
         repeat: false
-        running: true
+        running: false
         triggeredOnStart: false
-        onTriggered: root.updateAndRefresh()
+        onTriggered: {
+            root.warmupDone = true
+            root.updateAndRefresh()
+        }
     }
 
     Timer {
         id: refreshTimer
         interval: root.refreshMs
         repeat: true
-        running: true
+        running: root.opened
         triggeredOnStart: false
         onTriggered: root.updateAndRefresh()
     }

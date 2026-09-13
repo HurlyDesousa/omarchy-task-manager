@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import json
 import os
 import re
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-39"
+APP_VERSION = "0.5.5-40"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -92,9 +93,21 @@ def load_stats_state() -> dict:
 def save_stats_state(state: dict) -> None:
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        STATS_STATE_FILE.write_text(json.dumps(state) + "\n", encoding="utf-8")
+        tmp = STATE_DIR / f".stats-state.{os.getpid()}.tmp"
+        payload = json.dumps(state) + "\n"
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(STATS_STATE_FILE)
     except Exception:
         pass
+
+
+def _stats_state_lock():
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_DIR / "stats-state.lock"
+    lock_path.touch(exist_ok=True)
+    fh = open(lock_path, "w", encoding="utf-8")
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    return fh
 
 
 def _read_autostart_enabled() -> bool:
@@ -125,11 +138,9 @@ def _set_autostart(enabled: bool) -> str:
 
         if enabled:
             launch_line = f'o.launch_on_start("{APP_BINARY}")'
-            window_line = f'o.window("{APP_ID}", {{ float = true }})'
             new_block = (
                 f"{AUTOSTART_BLOCK_BEGIN}\n"
                 f"{launch_line}\n"
-                f"{window_line}\n"
                 f"{AUTOSTART_BLOCK_END}\n"
             )
             if has_block:
@@ -137,12 +148,13 @@ def _set_autostart(enabled: bool) -> str:
                 _window_re = re.compile(
                     r'o\.window\s*\(\s*["\']' + re.escape(APP_ID) + r'["\']'
                 )
-                if (
-                    re.search(r"o\.launch_on_start\s*\(", block_inner)
-                    and _window_re.search(block_inner)
-                ):
-                    return ""
-                text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
+                if re.search(r"o\.launch_on_start\s*\(", block_inner):
+                    if _window_re.search(block_inner):
+                        text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
+                    else:
+                        return ""
+                else:
+                    text = text[:i_begin] + new_block + text[i_end + len(AUTOSTART_BLOCK_END) + 1 :]
             else:
                 text = text.rstrip() + "\n\n" + new_block
         elif has_block:
@@ -536,7 +548,18 @@ def kill_process(pid: int) -> tuple[bool, str]:
 
 
 def build_snapshot() -> dict:
-    state = load_stats_state()
+    lock_fh = None
+    try:
+        lock_fh = _stats_state_lock()
+        state = load_stats_state()
+        return _build_snapshot_locked(state)
+    finally:
+        if lock_fh is not None:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            lock_fh.close()
+
+
+def _build_snapshot_locked(state: dict) -> dict:
     overall, cores = read_proc_stat()
     prev_overall = state.get("prev_overall")
     prev_overall_t = tuple(prev_overall) if isinstance(prev_overall, list) and len(prev_overall) == 2 else None
@@ -722,7 +745,7 @@ CURSOR_OAUTH_TOKEN_URL = "https://api2.cursor.sh/oauth/token"
 CURSOR_OAUTH_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 CURSOR_ACCESS_TOKEN_KEY = "cursorAuth/accessToken"
 CURSOR_REFRESH_TOKEN_KEY = "cursorAuth/refreshToken"
-CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-39"
+CURSOR_DASHBOARD_USER_AGENT = "omarchy-task-manager/0.5.5-40"
 CURSOR_TIER_LABELS = {
     "pro_plus": "Pro+",
     "pro-plus": "Pro+",
@@ -2066,12 +2089,7 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 
 
 def cmd_ai_usage(refresh: bool = False) -> int:
-    missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
-    grokbot = _usage_read_record("grokbot")
-    grokbot_limits = grokbot.get("limits") if isinstance(grokbot, dict) else None
-    grokbot_empty = not isinstance(grokbot_limits, list) or not grokbot_limits
-    stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
-    if refresh or missing or grokbot_empty or stale:
+    if refresh:
         cmd_ai_usage_update()
     agents = [_usage_panel_agent(agent_id, _usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS]
     print(json.dumps({"agents": agents, "updatedAt": _usage_now_iso()}, separators=(",", ":")))
