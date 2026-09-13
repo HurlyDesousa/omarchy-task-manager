@@ -113,6 +113,8 @@ If Waybar is present, `install.sh` adds a `󰓅` icon to `modules-center` next t
 
 ## Version
 
+**0.5.5-41** — Fold LIVE polish from `backup/20260913-polish-ship` after QA #52: TM compact snapshot (`--no-processes`), AI usage stale background refresh, taskManagerBin paths, kbd/AI tray polish. QA #52 preserved: prefs expand race, snapshot flock + atomic writes, autostart H3, install idempotency, ai-usage cache-only read.
+
 **0.5.5-40** — QA fixes: TM prefs expand race (apply after async prefs load); guard concurrent snapshots + atomic `stats-state.json` writes; drop legacy `o.window` from `autostart-set`. Install: idempotent AI tray `shell.json` patch + skip unchanged plugin overwrites. AI usage: `ai-usage` read is cache-only (update via panel open timers / refresh button / `ai-usage-update`); warmup/background timers run only while panel is open. ToggleSwitch/kbd/AI Usage QML polish preserved.
 
 **0.5.5-39** — AI Usage panel calls stable `~/.local/lib/omarchy-task-manager/omarchy-task-manager` backend; `install.sh` installs CLI to `LIB_DST`. Collector polish: Cursor plan info / sand usage / OAuth refresh / tier labels; Grok Bot weekly bar from sand API. `sw.art.cursor` stays off bar (0.5.5-38 fix preserved).
