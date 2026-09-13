@@ -2570,7 +2570,6 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 
 
 def cmd_ai_usage(refresh: bool = False) -> int:
-    _ensure_usage_imports()
     missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
     stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
     if refresh:
