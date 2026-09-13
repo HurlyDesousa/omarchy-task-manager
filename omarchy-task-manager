@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "0.5.5-43"
+APP_VERSION = "0.5.5-44"
 EM_DASH = "\u2014"
 
 PREFERRED_THERMAL = (
@@ -542,7 +542,7 @@ def kill_process(pid: int) -> tuple[bool, str]:
     return True, ""
 
 
-def build_snapshot() -> dict:
+def build_snapshot(*, include_processes: bool = True) -> dict:
     state = load_stats_state()
     overall, cores = read_proc_stat()
     prev_overall = state.get("prev_overall")
@@ -582,33 +582,35 @@ def build_snapshot() -> dict:
     processes = []
     if overall is not None:
         total_jiffies = overall[0] + overall[1]
-        ncpu = max(1, len(cores))
-        d_total = (total_jiffies - prev_total) if isinstance(prev_total, int) else 0
-        next_proc: dict[str, int] = {}
-        for pid, name, jiffies, rss, starttime in iter_processes():
-            key = f"{pid}:{starttime}"
-            cpu = 0.0
-            prev = prev_proc.get(key)
-            if prev is not None and d_total > 0:
-                cpu = max(0.0, 100.0 * (jiffies - prev) / d_total * ncpu)
-            next_proc[key] = jiffies
-            processes.append(
-                {
-                    "pid": pid,
-                    "name": name,
-                    "cpu": round(cpu),
-                    "cpu_txt": f"{round(cpu)}",
-                    "rss": rss,
-                    "rss_txt": fmt_bytes(rss),
-                    "starttime": starttime,
-                }
-            )
-        processes.sort(key=lambda row: (-row["cpu"], -row["rss"], row["name"].lower()))
+        if include_processes:
+            ncpu = max(1, len(cores))
+            d_total = (total_jiffies - prev_total) if isinstance(prev_total, int) else 0
+            next_proc: dict[str, int] = {}
+            for pid, name, jiffies, rss, starttime in iter_processes():
+                key = f"{pid}:{starttime}"
+                cpu = 0.0
+                prev = prev_proc.get(key)
+                if prev is not None and d_total > 0:
+                    cpu = max(0.0, 100.0 * (jiffies - prev) / d_total * ncpu)
+                next_proc[key] = jiffies
+                processes.append(
+                    {
+                        "pid": pid,
+                        "name": name,
+                        "cpu": round(cpu),
+                        "cpu_txt": f"{round(cpu)}",
+                        "rss": rss,
+                        "rss_txt": fmt_bytes(rss),
+                        "starttime": starttime,
+                    }
+                )
+            processes.sort(key=lambda row: (-row["cpu"], -row["rss"], row["name"].lower()))
+            state["prev_proc"] = next_proc
         state["prev_total_jiffies"] = total_jiffies
-        state["prev_proc"] = next_proc
     else:
         state["prev_total_jiffies"] = None
-        state["prev_proc"] = {}
+        if include_processes:
+            state["prev_proc"] = {}
 
     if overall is not None:
         state["prev_overall"] = [overall[0], overall[1]]
@@ -648,8 +650,8 @@ def build_snapshot() -> dict:
     }
 
 
-def cmd_snapshot() -> int:
-    print(json.dumps(build_snapshot(), separators=(",", ":")))
+def cmd_snapshot(*, include_processes: bool = True) -> int:
+    print(json.dumps(build_snapshot(include_processes=include_processes), separators=(",", ":")))
     return 0
 
 
@@ -2545,13 +2547,21 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
 
 
 def cmd_ai_usage(refresh: bool = False) -> int:
-    _ensure_usage_imports()
     missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
     stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
-    if refresh or missing or stale:
+    if refresh:
         cmd_ai_usage_update()
+        missing = any(_usage_read_record(agent_id) is None for agent_id in AGENT_USAGE_IDS)
+        stale = any(_usage_record_is_stale(_usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS)
     agents = [_usage_panel_agent(agent_id, _usage_read_record(agent_id)) for agent_id in AGENT_USAGE_IDS]
-    print(json.dumps({"agents": agents, "updatedAt": _usage_now_iso()}, separators=(",", ":")))
+    print(json.dumps(
+        {
+            "agents": agents,
+            "updatedAt": _usage_now_iso(),
+            "stale": bool(missing or stale),
+        },
+        separators=(",", ":"),
+    ))
     return 0
 
 
@@ -2627,7 +2637,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=APP_VERSION)
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("snapshot", help="Emit JSON stats snapshot")
+    snapshot_p = sub.add_parser("snapshot", help="Emit JSON stats snapshot")
+    snapshot_p.add_argument(
+        "--no-processes",
+        action="store_true",
+        help="Skip /proc process walk (compact panel)",
+    )
     kill_p = sub.add_parser("kill", help="Terminate a process (SIGTERM then SIGKILL)")
     kill_p.add_argument("pid", type=int)
 
@@ -2653,7 +2668,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "snapshot":
-        return cmd_snapshot()
+        return cmd_snapshot(include_processes=not args.no_processes)
     if args.command == "kill":
         return cmd_kill(args.pid)
     if args.command == "prefs-get":
