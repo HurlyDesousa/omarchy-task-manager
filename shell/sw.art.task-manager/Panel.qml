@@ -23,6 +23,8 @@ Panel {
     property var snapshot: ({})
     property var prefs: ({})
     property var processModel: []
+    property bool expandAppliedForOpen: false
+    property bool expandUserToggled: false
 
     readonly property string emDash: "\u2014"
     readonly property int refreshMs: {
@@ -32,8 +34,9 @@ Panel {
 
     function open() {
         root.controller.show()
+        root.expandAppliedForOpen = false
+        root.expandUserToggled = false
         loadPrefs()
-        applyStartupExpand()
         refresh()
     }
 
@@ -56,7 +59,8 @@ Panel {
     }
 
     function refresh() {
-        statsProc.running = true
+        if (!statsProc.running)
+            statsProc.running = true
     }
 
     function loadPrefs() {
@@ -64,10 +68,13 @@ Panel {
     }
 
     function applyStartupExpand() {
+        if (root.expandUserToggled)
+            return
         var startCompact = prefs.start_compact === true
         var remember = prefs.remember_expand !== false
         var lastCompact = prefs.last_compact !== false
         root.expanded = !(startCompact || (remember && lastCompact))
+        root.expandAppliedForOpen = true
     }
 
     function savePref(key, value) {
@@ -129,7 +136,11 @@ Panel {
             onRead: function(line) {
                 var l = line.trim()
                 if (!l) return
-                try { root.prefs = JSON.parse(l) } catch (e) {}
+                try {
+                    root.prefs = JSON.parse(l)
+                    if (root.opened && !root.expandAppliedForOpen && !root.expandUserToggled)
+                        root.applyStartupExpand()
+                } catch (e) {}
             }
         }
         command: ["omarchy-task-manager", "prefs-get"]
@@ -315,7 +326,7 @@ Panel {
                         }
 
                         Label {
-                            text: "Version 0.5.5-39"
+                            text: "Version 0.5.5-40"
                             color: Qt.darker(root.bar.foreground, 1.5)
                             font.family: root.bar.fontFamily
                             font.pixelSize: Style.font.bodySmall
@@ -427,7 +438,10 @@ Panel {
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.expanded = !root.expanded
+                                    onClicked: {
+                                        root.expandUserToggled = true
+                                        root.expanded = !root.expanded
+                                    }
                                 }
                             }
                             TextField {

@@ -35,6 +35,16 @@ USAGE_STATE_DIR="${HOME}/.local/state/omarchy/agents/usage"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python)
 
+install_if_changed() {
+  local src="$1"
+  local dst="$2"
+  local perm="${3:-644}"
+  if [[ -f "${dst}" ]] && cmp -s "${src}" "${dst}"; then
+    return 0
+  fi
+  install -Dm"${perm}" "${src}" "${dst}"
+}
+
 install_deps() {
   command -v pacman >/dev/null 2>&1 || return 0
 
@@ -109,9 +119,9 @@ ensure_hyprland_requires_autostart() {
 install_quickshell_plugin() {
   [[ -d "${PLUGIN_SRC}" ]] || { echo "Warning: plugin source not found at ${PLUGIN_SRC}"; return 0; }
   mkdir -p "${PLUGIN_DIR}"
-  install -Dm644 "${PLUGIN_SRC}/manifest.json" "${PLUGIN_DIR}/manifest.json"
-  install -Dm644 "${PLUGIN_SRC}/BarWidget.qml"  "${PLUGIN_DIR}/BarWidget.qml"
-  install -Dm644 "${PLUGIN_SRC}/Panel.qml"      "${PLUGIN_DIR}/Panel.qml"
+  install_if_changed "${PLUGIN_SRC}/manifest.json" "${PLUGIN_DIR}/manifest.json"
+  install_if_changed "${PLUGIN_SRC}/BarWidget.qml"  "${PLUGIN_DIR}/BarWidget.qml"
+  install_if_changed "${PLUGIN_SRC}/Panel.qml"      "${PLUGIN_DIR}/Panel.qml"
   echo "Quickshell plugin: installed to ${PLUGIN_DIR}"
 }
 
@@ -166,8 +176,8 @@ PY
 install_kbd_backlight_plugin() {
   [[ -d "${KBD_PLUGIN_SRC}" ]] || { echo "Warning: kbd-backlight plugin source not found at ${KBD_PLUGIN_SRC}"; return 0; }
   mkdir -p "${KBD_PLUGIN_DIR}"
-  install -Dm644 "${KBD_PLUGIN_SRC}/manifest.json"   "${KBD_PLUGIN_DIR}/manifest.json"
-  install -Dm644 "${KBD_PLUGIN_SRC}/KbdBacklight.qml" "${KBD_PLUGIN_DIR}/KbdBacklight.qml"
+  install_if_changed "${KBD_PLUGIN_SRC}/manifest.json"   "${KBD_PLUGIN_DIR}/manifest.json"
+  install_if_changed "${KBD_PLUGIN_SRC}/KbdBacklight.qml" "${KBD_PLUGIN_DIR}/KbdBacklight.qml"
   echo "kbd-backlight plugin: installed to ${KBD_PLUGIN_DIR}"
 }
 
@@ -245,11 +255,11 @@ install_ai_tray_plugins() {
       echo "Warning: plugin source not found at ${src}"; continue
     fi
     mkdir -p "${dir}"
-    install -Dm644 "${src}/manifest.json" "${dir}/manifest.json"
+    install_if_changed "${src}/manifest.json" "${dir}/manifest.json"
     local qml
     IFS=',' read -ra qml_files <<< "${files}"
     for qml in "${qml_files[@]}"; do
-      install -Dm644 "${src}/${qml}" "${dir}/${qml}"
+      install_if_changed "${src}/${qml}" "${dir}/${qml}"
     done
     echo "AI tray plugin: installed $(basename "${dir}") to ${dir}"
   done
@@ -289,25 +299,6 @@ def remove_ids(entries, ids):
         entries[:] = [e for e in entries if e.get("id") not in ids]
     return removed
 
-removed_cursor_center = remove_ids(center, {cursor_id})
-removed_cursor_right = remove_ids(right, {cursor_id})
-if removed_cursor_center or removed_cursor_right:
-    changed = True
-    print(
-        "shell.json: removed cursor bar launcher from layout:"
-        f" center={removed_cursor_center or []} right={removed_cursor_right or []}"
-    )
-
-migrated_center = remove_ids(center, set(bar_ids))
-if migrated_center:
-    changed = True
-    print(f"shell.json: removed AI tray from center: {migrated_center}")
-
-migrated_right = remove_ids(right, set(bar_ids))
-if migrated_right:
-    changed = True
-    print(f"shell.json: relocated AI tray within right (was: {migrated_right})")
-
 def insert_before_system_cluster(entries):
     ids = [e.get("id", "") for e in entries]
     if "omarchy.tray" in ids:
@@ -323,15 +314,46 @@ def insert_before_system_cluster(entries):
     for i, eid in enumerate(ids):
         if eid in system_ids:
             return i
-    return 0
+    return len(entries)
 
-insert_at = insert_before_system_cluster(right)
-entries = [{"id": pid} for pid in bar_ids]
-right[insert_at:insert_at] = entries
-changed = True
+def ai_tray_placed(entries, ids):
+    anchor = insert_before_system_cluster(entries)
+    if anchor + len(ids) > len(entries):
+        return False
+    for offset, pid in enumerate(ids):
+        if entries[anchor + offset].get("id") != pid:
+            return False
+    return True
 
-anchor = right[insert_at].get("id") if insert_at < len(right) else "end"
-print(f"shell.json: placed AI tray on bar.layout.right before {anchor}: {bar_ids}")
+removed_cursor_center = remove_ids(center, {cursor_id})
+removed_cursor_right = remove_ids(right, {cursor_id})
+if removed_cursor_center or removed_cursor_right:
+    changed = True
+    print(
+        "shell.json: removed cursor bar launcher from layout:"
+        f" center={removed_cursor_center or []} right={removed_cursor_right or []}"
+    )
+
+migrated_center = remove_ids(center, set(bar_ids))
+if migrated_center:
+    changed = True
+    print(f"shell.json: removed AI tray from center: {migrated_center}")
+
+if ai_tray_placed(right, bar_ids):
+    if not changed:
+        sys.exit(0)
+else:
+    migrated_right = remove_ids(right, set(bar_ids))
+    if migrated_right:
+        changed = True
+        print(f"shell.json: relocated AI tray within right (was: {migrated_right})")
+
+    insert_at = insert_before_system_cluster(right)
+    entries = [{"id": pid} for pid in bar_ids]
+    right[insert_at:insert_at] = entries
+    changed = True
+    anchor = right[insert_at].get("id") if insert_at < len(right) else "end"
+    print(f"shell.json: placed AI tray on bar.layout.right before {anchor}: {bar_ids}")
 
 if changed:
     path.write_text(
