@@ -5,7 +5,7 @@
   "version": "0.5.5-41",
   "author": "Hurly",
   "license": "MIT",
-  "description": "Aggregated quota panel for Cursor, Grok Bot, and SuperGrok",
+  "description": "Aggregated quota panel for Cursor, Grok Bot, SuperGrok, and Claude",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "AI Usage",
-    "description": "Quota bars for Cursor, Grok Bot, and SuperGrok (excludes local pi)",
+    "description": "Quota bars for Cursor, Grok Bot, SuperGrok, and Claude (excludes local pi)",
     "category": "AI",
     "allowMultiple": false,
     "defaultSection": "right"

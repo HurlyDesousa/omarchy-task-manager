@@ -1,4 +1,4 @@
-// AI Usage panel — Cursor Pro+ / Grok Bot / SuperGrok quota bars.
+// AI Usage panel — Cursor Pro+ / Grok Bot / SuperGrok / Claude quota bars.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -170,7 +170,7 @@ Panel {
         centerOnBar: false
         focusTarget: keyCatcher
         contentWidth: panel.fittedContentWidth(Style.space(440))
-        contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight, Style.space(520))
+        contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight, Style.space(820))
 
         PanelKeyCatcher {
             id: keyCatcher
@@ -337,6 +337,23 @@ Panel {
                             percentLabel: root.percentLabel
                             limitPercent: root.limitPercent
                             statusLine: root.statusLine(root.agentById("grok"))
+                            splitMeterTitle: root.splitMeterTitle
+                            cardSurface: root.cardSurface
+                            barTrack: root.barTrack
+                            cursorBarFill: root.cursorBarFill
+                            otherBarFill: root.otherBarFill
+                            grokBotBarFill: root.grokBotBarFill
+                            mutedCaption: root.mutedCaption
+                        }
+
+                        ClaudeUsageSection {
+                            width: parent.width
+                            agent: root.agentById("claude")
+                            bar: root.bar
+                            emDash: root.emDash
+                            percentLabel: root.percentLabel
+                            limitPercent: root.limitPercent
+                            statusLine: root.statusLine(root.agentById("claude"))
                             splitMeterTitle: root.splitMeterTitle
                             cardSurface: root.cardSurface
                             barTrack: root.barTrack
@@ -529,6 +546,7 @@ Panel {
         property color grokBotBarFill
         property color mutedCaption
         property string statusLine: ""
+        property string notice: ""
         property bool showMeters: true
 
         radius: Style.cornerRadius
@@ -569,6 +587,16 @@ Panel {
                 visible: card.statusLine !== "" && (!card.showMeters || !(card.limits || []).length)
                 text: card.statusLine
                 color: card.mutedCaption
+                font.family: card.bar.fontFamily
+                font.pixelSize: Style.font.caption
+            }
+
+            Label {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                visible: card.notice !== "" && card.showMeters
+                text: card.notice
+                color: root.themeUrgent
                 font.family: card.bar.fontFamily
                 font.pixelSize: Style.font.caption
             }
@@ -729,6 +757,49 @@ Panel {
                 }
                 return styled
             }
+        }
+    }
+
+    component ClaudeUsageSection: Column {
+        property var agent
+        property var bar
+        property string emDash
+        property var percentLabel
+        property var limitPercent
+        property string statusLine: ""
+        property var splitMeterTitle
+        property color cardSurface
+        property color barTrack
+        property color cursorBarFill
+        property color otherBarFill
+        property color grokBotBarFill
+        property color mutedCaption
+
+        spacing: Style.space(8)
+        width: parent.width
+
+        SectionNameRow {
+            width: parent.width
+            titleText: "Claude"
+            modelMeta: agent && agent.tierLabel ? agent.tierLabel : ""
+        }
+
+        UsageCard {
+            width: parent.width
+            bar: parent.bar
+            limits: agent ? (agent.limits || []) : []
+            notice: agent && agent.notice ? agent.notice : ""
+            percentLabel: parent.percentLabel
+            limitPercent: parent.limitPercent
+            splitMeterTitle: parent.splitMeterTitle
+            cardSurface: parent.cardSurface
+            barTrack: parent.barTrack
+            cursorBarFill: parent.cursorBarFill
+            otherBarFill: parent.otherBarFill
+            grokBotBarFill: parent.grokBotBarFill
+            mutedCaption: parent.mutedCaption
+            statusLine: parent.statusLine
+            showMeters: agent && (agent.limits || []).length > 0
         }
     }
 }
