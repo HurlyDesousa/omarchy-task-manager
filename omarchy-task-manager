@@ -725,15 +725,16 @@ def cmd_autostart_set(value: str) -> int:
     return 0
 
 
-# ── AI agent usage (Cursor / Grok Bot / SuperGrok) ──────────────────────────
+# ── AI agent usage (Cursor / Grok Bot / SuperGrok / Claude) ─────────────────
 # Part of the shared omarchy-task-manager CLI — keep ai-usage subcommands when
 # bumping pkgrel for unrelated TM / kbd / fan changes.
 
-AGENT_USAGE_IDS = ("cursor", "grokbot", "grok")
+AGENT_USAGE_IDS = ("cursor", "grokbot", "grok", "claude")
 AGENT_USAGE_NAMES = {
     "cursor": "Cursor",
     "grokbot": "Grok Bot",
     "grok": "SuperGrok",
+    "claude": "Claude",
 }
 AGENT_USAGE_LEGACY_IDS: dict[str, tuple[str, ...]] = {
     "grokbot": ("codex",),
@@ -782,6 +783,10 @@ USAGE_MISSING_HELP: dict[str, tuple[str, str]] = {
         "SuperGrok usage not loaded",
         "Run `grok login` on this laptop, then refresh. "
         "Reads SuperGrok weekly Chat + Grok Build usage from grok login.",
+    ),
+    "claude": (
+        "Claude usage not loaded",
+        "Run `claude auth login` with your Claude subscription, then refresh.",
     ),
 }
 
@@ -984,12 +989,12 @@ def _usage_collector_paths(agent_id: str) -> list[Path]:
     return unique
 
 
-def _usage_run_collector(agent_id: str) -> tuple[bool, str]:
+def _usage_run_collector(agent_id: str, *args: str) -> tuple[bool, str]:
     errors: list[str] = []
     for collector in _usage_collector_paths(agent_id):
         try:
             proc = subprocess.run(
-                [str(collector)],
+                [str(collector), *args],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -2483,6 +2488,190 @@ def _usage_grokbot_overlay_limits() -> list[dict]:
     ]
 
 
+CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+CLAUDE_REFRESH_MARGIN_MS = 5 * 60 * 1000
+# Cloudflare in front of the token endpoint bans Python's default User-Agent (error 1010).
+CLAUDE_USER_AGENT = f"omarchy-task-manager/{APP_VERSION}"
+
+
+def _usage_claude_credentials_path() -> Path:
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    return Path(os.path.expanduser(base)) / ".credentials.json"
+
+
+def _usage_claude_refresh_login() -> bool:
+    """Renew Claude Code's sign-in the way Claude Code does. Never logs tokens.
+
+    Claude Code only refreshes while it runs, so a panel that just watches
+    usage would find the token lapsed within hours and stop updating.
+    """
+    path = _usage_claude_credentials_path()
+    lock_path = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "omarchy-task-manager-claude-login.lock"
+    try:
+        lock = open(lock_path, "w", encoding="utf-8")
+    except OSError:
+        return False
+    with lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            login = json.loads(path.read_text(encoding="utf-8")).get("claudeAiOauth")
+        except Exception:
+            return False
+        if not isinstance(login, dict):
+            return False
+        refresh = str(login.get("refreshToken") or "").strip()
+        if not refresh or _usage_number(login.get("expiresAt")) - CLAUDE_REFRESH_MARGIN_MS > time.time() * 1000:
+            return False
+
+        body = {"grant_type": "refresh_token", "refresh_token": refresh, "client_id": CLAUDE_OAUTH_CLIENT_ID}
+        scopes = login.get("scopes")
+        if isinstance(scopes, list) and scopes:
+            body["scope"] = " ".join(str(scope) for scope in scopes)
+        request = urllib.request.Request(
+            CLAUDE_TOKEN_URL,
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": CLAUDE_USER_AGENT,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        access = str(payload.get("access_token") or "").strip()
+        try:
+            expires_in = float(payload.get("expires_in") or 0)
+        except (TypeError, ValueError):
+            expires_in = 0.0
+        if not access or expires_in <= 0:
+            return False
+
+        # A Claude Code that renewed meanwhile holds the newer pair; keep it.
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        current = data.get("claudeAiOauth") if isinstance(data, dict) else None
+        if not isinstance(current, dict) or current.get("refreshToken") != refresh:
+            return False
+        now_ms = time.time() * 1000
+        current["accessToken"] = access
+        current["refreshToken"] = str(payload.get("refresh_token") or refresh)
+        current["expiresAt"] = int(now_ms + expires_in * 1000)
+        refresh_life = _usage_number(payload.get("refresh_token_expires_in"))
+        if refresh_life > 0:
+            current["refreshTokenExpiresAt"] = int(now_ms + refresh_life * 1000)
+        scope = payload.get("scope")
+        if isinstance(scope, str) and scope.strip():
+            current["scopes"] = scope.split()
+
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(data))
+            tmp.replace(path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            return False
+        return True
+
+
+CLAUDE_SCOPED_WINDOWS = (
+    (" Session", "Current session"),
+    (" Weekly", "Current week"),
+    (" Monthly", "Current month"),
+)
+
+
+def _usage_claude_reset_caption(resets_at: Any) -> str:
+    """Windows closing within a day read better as a clock time than a date."""
+    reset_ts = _usage_parse_updated_at(resets_at)
+    if reset_ts is None:
+        return ""
+    seconds_left = reset_ts - time.time()
+    if seconds_left >= 86400:
+        return _usage_reset_caption(resets_at)
+    reset_local = time.localtime(reset_ts)
+    clock = time.strftime("%H:%M", reset_local)
+    if reset_local.tm_yday != time.localtime().tm_yday:
+        clock = "tomorrow " + clock
+    minutes = int(seconds_left // 60)
+    if minutes < 1:
+        return f"Resets {clock}"
+    if minutes < 60:
+        return f"Resets {clock} ({minutes} min left)"
+    return f"Resets {clock} ({minutes // 60} h {minutes % 60} min left)"
+
+
+def _usage_claude_panel_limits(limits: list[dict]) -> list[dict]:
+    """Map omarchy-agent-usage-claude windows onto claude.ai's usage wording."""
+    rows: list[dict] = []
+    for entry in limits:
+        percent = _usage_limit_percent(entry)
+        if percent is None:
+            continue
+        label = str(entry.get("title") or entry.get("label") or "").strip()
+        bar_style = "accent"
+        if label.startswith("Session ("):
+            label = "Current session"
+        elif label.startswith("Weekly ("):
+            label = "Current week · All models"
+        else:
+            # Model-scoped windows arrive as "<model> <Window>", e.g. "Opus 5 Weekly".
+            for suffix, window in CLAUDE_SCOPED_WINDOWS:
+                if label.endswith(suffix) and len(label) > len(suffix):
+                    label = f"{window} · {label[: -len(suffix)].strip()}"
+                    break
+            bar_style = "muted"
+        resets_at = entry.get("resetsAt")
+        rows.append(
+            _usage_panel_limit(
+                label or "Usage",
+                percent,
+                bar_style=bar_style,
+                caption=_usage_claude_reset_caption(resets_at),
+                resets_at=resets_at,
+            )
+        )
+    return rows
+
+
+def _usage_claude_checked_ago() -> str:
+    cache = (
+        Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+        / "omarchy" / "agent-usage" / "claude-limits.json"
+    )
+    try:
+        fetched = float(json.loads(cache.read_text(encoding="utf-8")).get("fetchedAtMs") or 0) / 1000
+    except Exception:
+        return ""
+    if fetched <= 0:
+        return ""
+    minutes = max(0, int((time.time() - fetched) // 60))
+    if minutes < 60:
+        return f"{minutes} min ago"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} h ago"
+    return f"{minutes // 1440} days ago"
+
+
+def _usage_claude_notice(usage_status: str, panel_limits: list[dict]) -> str:
+    """The collector keeps its last numbers once the sign-in lapses; say so."""
+    if not panel_limits or usage_status.lower() != "sign-in expired":
+        return ""
+    ago = _usage_claude_checked_ago()
+    checked = f"Last checked {ago}" if ago else "Last known numbers"
+    return f"{checked}: Claude Code's sign-in expired. Start Claude Code or run `claude auth login` to refresh."
+
+
 def _usage_panel_limits(agent_id: str, limits: list[dict]) -> list[dict]:
     if agent_id == "cursor":
         return _usage_cursor_panel_limits(limits)
@@ -2491,6 +2680,8 @@ def _usage_panel_limits(agent_id: str, limits: list[dict]) -> list[dict]:
         return rows if rows else _usage_grokbot_overlay_limits()
     if agent_id == "grok":
         return _usage_grok_build_panel_limits(limits)
+    if agent_id == "claude":
+        return _usage_claude_panel_limits(limits)
     return limits
 
 
@@ -2519,6 +2710,10 @@ def _usage_normalize_auth_help(agent_id: str, record: dict) -> tuple[str, str]:
     if agent_id == "grok" and "limits unavailable" in usage_status.lower():
         if not auth_help or auth_help.lower() == "initialize":
             auth_help = "Run `grok login` to refresh SuperGrok limits; local stats may still apply."
+    if agent_id == "claude":
+        auth_help = auth_help.replace(" Local Claude Code stats are still shown.", "")
+        if usage_status.lower() == "waiting for auth":
+            auth_help = USAGE_MISSING_HELP["claude"][1]
     return usage_status, auth_help
 
 
@@ -2565,6 +2760,7 @@ def _usage_panel_agent(agent_id: str, record: dict | None) -> dict:
         "todayTotalTokens": _usage_number(record.get("todayTotalTokens")),
         "todayPrompts": _usage_number(record.get("todayPrompts")),
         "limits": panel_limits,
+        "notice": _usage_claude_notice(usage_status, panel_limits) if agent_id == "claude" else "",
         "updatedAt": str(record.get("updatedAt") or _usage_now_iso()),
     }
 
@@ -2652,6 +2848,14 @@ def cmd_ai_usage_update() -> int:
 
         _usage_write_record(agent_id, merged)
 
+    _usage_claude_refresh_login()
+    claude_ok, claude_err = _usage_run_collector("claude", "--limits-only")
+    if not claude_ok and _usage_read_record("claude") is None:
+        record = _usage_base_record("claude")
+        record["usageStatusText"] = "Claude usage unavailable"
+        record["authHelpText"] = claude_err or USAGE_MISSING_HELP["claude"][1]
+        _usage_write_record("claude", record)
+
     return 0
 
 
@@ -2680,7 +2884,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ai_usage = sub.add_parser(
         "ai-usage",
-        help="Emit aggregated AI usage JSON for Cursor, Grok Bot, and SuperGrok",
+        help="Emit aggregated AI usage JSON for Cursor, Grok Bot, SuperGrok, and Claude",
     )
     ai_usage.add_argument(
         "--refresh",

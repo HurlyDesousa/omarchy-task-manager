@@ -57,7 +57,7 @@ Stats/process data comes from the Python backend:
 ```bash
 omarchy-task-manager snapshot   # JSON to stdout
 omarchy-task-manager kill PID
-omarchy-task-manager ai-usage   # aggregated Cursor / Grok Bot / Grok build usage JSON
+omarchy-task-manager ai-usage   # aggregated Cursor / Grok Bot / SuperGrok / Claude usage JSON
 omarchy-task-manager ai-usage-update
 ```
 
@@ -70,11 +70,13 @@ Four Quickshell plugins install to `~/.config/omarchy/plugins/`. **`pi-local`**,
 | `sw.art.cursor` | 󱃸 | Plugin files only (not placed on bar); launch via app menu or `cursor` on PATH |
 | `sw.art.pi-local` | π | Terminal: `pi --provider llama-local`; green dot when `http://127.0.0.1:8080/health` is 200 |
 | `sw.art.grok` | 󰬬 | Terminal: local `grok` CLI (mise shim; no xAI API calls from the widget) |
-| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Grok Bot + Grok build quota bars (excludes local pi) |
+| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Grok Bot + SuperGrok + Claude quota bars (excludes local pi) |
 
 Terminal pattern: `xdg-terminal-exec bash --login -c 'CMD; exec $SHELL'` with ghostty/kitty fallbacks.
 
 The usage panel reads Omarchy agent-usage JSON from `~/.local/state/omarchy/agents/usage/` and refreshes via `omarchy agent usage-update` (Grok Bot) plus lightweight local collectors for Cursor and Grok build that fail soft — no paid Grok Bot/xAI API calls from the panel.
+
+Claude comes from Omarchy's `omarchy-agent-usage-claude` (Anthropic's OAuth usage endpoint, run with `--limits-only`): current session, current week, and any per-model weekly limits. Only Claude Code renews its saved sign-in, and only while it runs, so when `~/.claude/.credentials.json` has lapsed `ai-usage-update` renews it the way Claude Code does (same token endpoint and client, written back atomically at `0600`, never over a newer pair). If that fails the Claude card says when its numbers were last checked instead of showing them as current.
 
 **Maintainers:** `ai-usage` and `ai-usage-update` are part of the shared `omarchy-task-manager` backend (same binary as Task Manager stats). When bumping pkgrel for TM, kbd-backlight, or fan fixes, keep these subcommands and the AI tray plugin installs in `PKGBUILD` / `install.sh` — the usage panel depends on them.
 
