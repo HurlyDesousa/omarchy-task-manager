@@ -48,11 +48,5 @@ package() {
     "$pkgdir/usr/share/omarchy/plugins/sw.art.grok/manifest.json"
   install -Dm644 "$startdir/shell/sw.art.grok/BarWidget.qml" \
     "$pkgdir/usr/share/omarchy/plugins/sw.art.grok/BarWidget.qml"
-  install -Dm644 "$startdir/shell/sw.art.ai-usage/manifest.json" \
-    "$pkgdir/usr/share/omarchy/plugins/sw.art.ai-usage/manifest.json"
-  install -Dm644 "$startdir/shell/sw.art.ai-usage/BarWidget.qml" \
-    "$pkgdir/usr/share/omarchy/plugins/sw.art.ai-usage/BarWidget.qml"
-  install -Dm644 "$startdir/shell/sw.art.ai-usage/Panel.qml" \
-    "$pkgdir/usr/share/omarchy/plugins/sw.art.ai-usage/Panel.qml"
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
