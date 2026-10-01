@@ -1,4 +1,4 @@
-# Maintainer: Hurly <toby@s-w.art>
+# Maintainer: HurlyDesousa <34354667+HurlyDesousa@users.noreply.github.com>
 pkgname=omarchy-task-manager
 pkgver=0.5.5
 pkgrel=41
