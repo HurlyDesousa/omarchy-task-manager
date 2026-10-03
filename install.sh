@@ -28,10 +28,6 @@ PILOCAL_PLUGIN_SRC="${ROOT}/shell/${PILOCAL_PLUGIN_ID}"
 GROK_PLUGIN_ID="sw.art.grok"
 GROK_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${GROK_PLUGIN_ID}"
 GROK_PLUGIN_SRC="${ROOT}/shell/${GROK_PLUGIN_ID}"
-AI_USAGE_PLUGIN_ID="sw.art.ai-usage"
-AI_USAGE_PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${AI_USAGE_PLUGIN_ID}"
-AI_USAGE_PLUGIN_SRC="${ROOT}/shell/${AI_USAGE_PLUGIN_ID}"
-USAGE_STATE_DIR="${HOME}/.local/state/omarchy/agents/usage"
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 PKGS=(python)
 
@@ -233,9 +229,10 @@ path.write_text(
 PY
 }
 
-# ── AI tray plugins (cursor / pi-local / grok / ai-usage) ─────────────────────
-# pi-local, grok, and ai-usage are patched into bar.layout.right immediately
-# left of the system-icon cluster (before omarchy.tray when present).
+# ── AI tray plugins (cursor / pi-local / grok) ────────────────────────────────
+# pi-local and grok are patched into bar.layout.right immediately left of the
+# system-icon cluster (before omarchy.tray when present). The AI Usage panel is
+# its own plugin: https://github.com/HurlyDesousa/omarchy-ai-usage
 # sw.art.cursor files are installed but never added to bar.layout.*; existing
 # cursor bar entries are removed on upgrade (idempotent).
 
@@ -244,7 +241,6 @@ install_ai_tray_plugins() {
     "${CURSOR_PLUGIN_SRC}:${CURSOR_PLUGIN_DIR}:BarWidget.qml"
     "${PILOCAL_PLUGIN_SRC}:${PILOCAL_PLUGIN_DIR}:BarWidget.qml"
     "${GROK_PLUGIN_SRC}:${GROK_PLUGIN_DIR}:BarWidget.qml"
-    "${AI_USAGE_PLUGIN_SRC}:${AI_USAGE_PLUGIN_DIR}:BarWidget.qml,Panel.qml"
   )
   local entry
   for entry in "${entries[@]}"; do
@@ -270,12 +266,11 @@ patch_shell_json_ai_tray() {
     echo "Note: ${SHELL_JSON} not found; skipping AI tray bar layout patch."
     echo "      Run: omarchy plugin enable ${PILOCAL_PLUGIN_ID}"
     echo "           omarchy plugin enable ${GROK_PLUGIN_ID}"
-    echo "           omarchy plugin enable ${AI_USAGE_PLUGIN_ID}"
     return 0
   }
 
   python3 - "${SHELL_JSON}" "${CURSOR_PLUGIN_ID}" \
-      "${PILOCAL_PLUGIN_ID}" "${GROK_PLUGIN_ID}" "${AI_USAGE_PLUGIN_ID}" <<'PY'
+      "${PILOCAL_PLUGIN_ID}" "${GROK_PLUGIN_ID}" <<'PY'
 import json, sys, pathlib
 
 path       = pathlib.Path(sys.argv[1])
@@ -361,11 +356,6 @@ if changed:
         encoding="utf-8",
     )
 PY
-}
-
-ensure_usage_state_dir() {
-  # Preserve across reinstalls — never delete existing usage JSON on upgrade.
-  mkdir -p "${USAGE_STATE_DIR}"
 }
 
 patch_shell_json_tray_hidden() {
@@ -490,7 +480,6 @@ patch_shell_json_kbd
 install_ai_tray_plugins
 patch_shell_json_ai_tray
 patch_shell_json_tray_hidden
-ensure_usage_state_dir
 upsert_waybar_config
 upsert_waybar_style
 
@@ -509,7 +498,10 @@ echo "AI tray plugins:"
 echo "  ${CURSOR_PLUGIN_DIR}  (Cursor IDE — plugin files only, not added to bar)"
 echo "  ${PILOCAL_PLUGIN_DIR}  (pi --provider llama-local)"
 echo "  ${GROK_PLUGIN_DIR}  (grok CLI)"
-echo "  ${AI_USAGE_PLUGIN_DIR}  (Cursor/Grok Bot/Grok build quota usage)"
-echo "  Bar icons on bar.layout.right before system cluster: pi-local → grok → ai-usage"
+echo "  Bar icons on bar.layout.right before system cluster: pi-local → grok"
 echo "  Terminal launcher: xdg-terminal-exec (fallback: ghostty, kitty)"
-echo "  Usage refresh: omarchy-task-manager ai-usage-update"
+echo "AI Usage is its own plugin now:"
+echo "  omarchy plugin add https://github.com/HurlyDesousa/omarchy-ai-usage.git --enable"
+if [[ -d "${HOME}/.config/omarchy/plugins/sw.art.ai-usage" ]]; then
+  echo "  The old copy is still installed; remove it with: omarchy plugin remove sw.art.ai-usage"
+fi

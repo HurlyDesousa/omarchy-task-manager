@@ -57,26 +57,26 @@ Stats/process data comes from the Python backend:
 ```bash
 omarchy-task-manager snapshot   # JSON to stdout
 omarchy-task-manager kill PID
-omarchy-task-manager ai-usage   # aggregated Cursor / Grok Bot / Grok build usage JSON
-omarchy-task-manager ai-usage-update
 ```
 
-## AI tray (launchers + usage)
+## AI tray (launchers)
 
-Four Quickshell plugins install to `~/.config/omarchy/plugins/`. **`pi-local`**, **`grok`**, and **`ai-usage`** are placed on **`bar.layout.right`** immediately **left of the system-icon cluster** (`omarchy.tray` → agents → bluetooth → network → audio → monitor → `omarchy.power`). Order: pi-local → grok → ai-usage. `install.sh` migrates any prior `center` or misplaced `right` entries on re-run (idempotent). **`sw.art.cursor`** plugin files are installed but **not** added to the bar layout; existing `sw.art.cursor` bar entries are removed on upgrade.
+Three Quickshell plugins install to `~/.config/omarchy/plugins/`. **`pi-local`** and **`grok`** are placed on **`bar.layout.right`** immediately **left of the system-icon cluster** (`omarchy.tray` → agents → bluetooth → network → audio → monitor → `omarchy.power`). Order: pi-local → grok. `install.sh` migrates any prior `center` or misplaced `right` entries on re-run (idempotent). **`sw.art.cursor`** plugin files are installed but **not** added to the bar layout; existing `sw.art.cursor` bar entries are removed on upgrade.
 
 | Plugin | Bar icon | Action |
 |---|---|---|
 | `sw.art.cursor` | 󱃸 | Plugin files only (not placed on bar); launch via app menu or `cursor` on PATH |
 | `sw.art.pi-local` | π | Terminal: `pi --provider llama-local`; green dot when `http://127.0.0.1:8080/health` is 200 |
 | `sw.art.grok` | 󰬬 | Terminal: local `grok` CLI (mise shim; no xAI API calls from the widget) |
-| `sw.art.ai-usage` | 󰚩 | KeyboardPanel: Cursor + Grok Bot + Grok build quota bars (excludes local pi) |
 
 Terminal pattern: `xdg-terminal-exec bash --login -c 'CMD; exec $SHELL'` with ghostty/kitty fallbacks.
 
-The usage panel reads Omarchy agent-usage JSON from `~/.local/state/omarchy/agents/usage/` and refreshes via `omarchy agent usage-update` (Grok Bot) plus lightweight local collectors for Cursor and Grok build that fail soft — no paid Grok Bot/xAI API calls from the panel.
+The AI Usage panel (Cursor, Grok Bot, SuperGrok, and Claude quota bars) used to ship here as `sw.art.ai-usage` with `ai-usage` / `ai-usage-update` in this backend. It is its own plugin now, with its own backend:
 
-**Maintainers:** `ai-usage` and `ai-usage-update` are part of the shared `omarchy-task-manager` backend (same binary as Task Manager stats). When bumping pkgrel for TM, kbd-backlight, or fan fixes, keep these subcommands and the AI tray plugin installs in `PKGBUILD` / `install.sh` — the usage panel depends on them.
+```bash
+omarchy plugin add https://github.com/HurlyDesousa/omarchy-ai-usage.git --enable
+omarchy plugin remove sw.art.ai-usage   # if the old copy is still installed
+```
 
 ## What it shows
 
